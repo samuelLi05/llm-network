@@ -32,6 +32,7 @@ class RedisStream:
             if messages:
                 for stream, message_list in messages:
                     for message_id, message_data in message_list:
+                        print (f"Consumer '{consumer_name}' received message {message_id} from stream '{stream_name}': {message_data}")
                         yield message_id, message_data
                         self.redis.xack(stream_name, group_name, message_id)
             await asyncio.sleep(0.1) # Prevent busy-waiting

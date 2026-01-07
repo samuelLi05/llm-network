@@ -14,12 +14,19 @@ async def main():
         id="agent2",
         init_prompt="You are an unhelpful AI assistant.",
         stream_name="agent_stream",
-        stream_group="group1"
+        stream_group="group2"
     )
 
     # Start the agents
-    #await agent1.start()
-    #await agent2.start()
+    await agent1.start()
+    await agent2.start()
+
+    # Test message from agent1 to agent2
+    await agent1.publish_message("Hello from Agent 1!")
+
+    # Keep the main function running to allow agents to process messages
+    await asyncio.sleep(60)  # Run for 30 seconds for demonstration
+
 
 if __name__ == "__main__":
     asyncio.run(main())
