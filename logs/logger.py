@@ -8,7 +8,7 @@ from typing import Any
 """Asynchronous Logger that writes log messages to a file using a separate thread."""
 class Logger:
     def __init__(self, num_agents: int):
-        self.file_path = os.path.join(os.path.dirname(__file__), time.strftime(f"log_%Y%m%d-%H%M%S_{num_agents}.log"))
+        self.file_path = os.path.join(os.path.dirname(__file__), "network_logs", time.strftime(f"log_%Y%m%d-%H%M%S_{num_agents}.log"))
         self.log_queue = queue.Queue()
         self._stop_event = threading.Event()
         # start logging thread
