@@ -7,7 +7,7 @@ import os
 import asyncio
 from dotenv import load_dotenv
 import openai
-from network.network import RedisStream
+from network.stream import RedisStream
 
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")

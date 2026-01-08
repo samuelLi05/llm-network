@@ -1,9 +1,11 @@
 import redis
 import asyncio
 
+from network.cache import RedisCache
+
 class RedisStream:
     def __init__(self, host='localhost', port=6379, db=0):
-        self.redis = redis.Redis(host=host, port=port, db=db, decode_responses=True)
+        self.redis = redis.Redis(host=host, port=port, db=db, decode_responses=True) 
 
     async def create_consumer_group(self, stream_name, group_name):
         try:
