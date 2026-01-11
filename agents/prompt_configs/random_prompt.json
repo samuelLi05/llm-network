@@ -285,7 +285,7 @@
     "implement"
   ],
 
-  "opinion_templates": [
+  "templates": [
     "I firmly believe that {adjective} {topic} benefits the {nouns_people_generic}.",
     "From the perspective of a {nouns_people_generic}, {topic} seems {adjective}.",
     "As a {nouns_people_generic}, I would {verb} {topic} because it is {adjective}.",

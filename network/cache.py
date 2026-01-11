@@ -5,7 +5,7 @@ import json
 """Asynchronous Redis-based cache for storing and retrieving agent responses based on agent id."""
 class RedisCache:
     def __init__(self, host:str='localhost', port:int=6379, db:int=1, prefix: str='cache:'):
-        self.redis = aioredis.Redis(host=host, port=port, db=db)
+        self.redis = aioredis(host=host, port=port, db=db)
         self.prefix = prefix
 
     def _key(self, key: str) -> str:
