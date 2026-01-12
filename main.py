@@ -13,11 +13,11 @@ from network.cache import RedisCache
 from logs.logger import Logger, console_logger
 
 # Configuration
-NUM_AGENTS = 3
+NUM_AGENTS = 10
 STREAM_NAME = "agent_stream"
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
-RUN_DURATION_SECONDS = 60  # How long to run the demo
+RUN_DURATION_SECONDS = 100
 
 initial_prompt_template = (
     "You are agent {agent_id} in a multi-agent social network debate about '{topic}'. " \
