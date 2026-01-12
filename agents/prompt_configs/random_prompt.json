@@ -32,7 +32,7 @@
     "personal finance"
   ],
 
-  "adjectives_abstract": [
+  "adjective": [
     "fundamental",
     "controversial",
     "progressive",
@@ -52,10 +52,7 @@
     "transformative",
     "incremental",
     "experimental",
-    "traditional"
-  ],
-
-  "adjectives_descriptive": [
+    "traditional",
     "ancient",
     "modern",
     "fragile",
@@ -262,7 +259,7 @@
     "inspired"
   ],
 
-  "verbs_actions": [
+  "verb": [
     "argue",
     "defend",
     "criticize",
@@ -287,14 +284,14 @@
 
   "templates": [
     "I firmly believe that {adjective} {topic} benefits the {nouns_people_generic}.",
-    "From the perspective of a {nouns_people_generic}, {topic} seems {adjective}.",
+    "From the perspective of a {nouns_people_generic}, I feel {emotions_and_tones} about how {topic} seems {adjective}.",
     "As a {nouns_people_generic}, I would {verb} {topic} because it is {adjective}.",
     "The {nouns_locations} perspective: {topic} is {adjective} and affects {nouns_people_generic}.",
     "Considering {abstract_concepts}, {topic} appears {adjective}; {verb} is required.",
-    "It's {adjective} when {nouns_people_generic} interact with {topic} in the {nouns_locations}.",
-    "My experience as a {nouns_people_generic} shows that {topic} is {adjective} and impacts {nouns_food} availability.",
+    "It's {adjective} when {nouns_people_generic} interact with {topic} through a {nouns_technology} in the {nouns_locations}.",
+    "My experience as a {nouns_people_generic} shows that {topic} is {adjective} and impacts {nouns_food} availability; even a {nouns_animals} can notice the change.",
     "In terms of {abstract_concepts}, {topic} should be seen as {adjective} and we should {verb} accordingly.",
-    "Many see {topic} as {adjective}, but {nouns_people_generic} often disagree.",
+    "Many see {topic} as {adjective}, but {nouns_people_generic} often disagree—like arguing over a {nouns_household_items} at home.",
     "If we prioritize {abstract_concepts}, {topic} will become more {adjective} for the {nouns_people_generic}."
   ]
 }

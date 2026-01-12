@@ -2,6 +2,7 @@ import redis
 import asyncio
 
 from network.cache import RedisCache
+from logs.logger import console_logger
 
 class RedisStream:
     def __init__(self, host='localhost', port=6379, db=0):
@@ -10,10 +11,10 @@ class RedisStream:
     async def create_consumer_group(self, stream_name, group_name):
         try:
             self.redis.xgroup_create(stream_name, group_name, id='0', mkstream=True)
-            print(f"Consumer group '{group_name}' created for stream '{stream_name}'.")
+            console_logger.info(f"Consumer group '{group_name}' created for stream '{stream_name}'.")
         except redis.exceptions.ResponseError as e:
             if "BUSYGROUP" in str(e):
-                print(f"Consumer group '{group_name}' already exists for stream '{stream_name}'.")
+                console_logger.info(f"Consumer group '{group_name}' already exists for stream '{stream_name}'.")
             else:
                 raise
 
@@ -22,7 +23,7 @@ class RedisStream:
         Publishes a message to the specified Redis stream.
         """
         message_id = self.redis.xadd(stream_name, message_data)
-        print(f"Message {message_id} published to stream '{stream_name}'.")
+        console_logger.info(f"Message {message_id} published to stream '{stream_name}'.")
         return message_id
 
     async def consume_messages(self, stream_name, group_name, consumer_name):
@@ -34,7 +35,7 @@ class RedisStream:
             if messages:
                 for stream, message_list in messages:
                     for message_id, message_data in message_list:
-                        print (f"Consumer '{consumer_name}' received message {message_id} from stream '{stream_name}': {message_data}")
+                        # console_logger.info(f"Consumer '{consumer_name}' received message {message_id} from stream '{stream_name}': {message_data}")
                         yield message_id, message_data
                         self.redis.xack(stream_name, group_name, message_id)
             await asyncio.sleep(0.1) # Prevent busy-waiting

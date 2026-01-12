@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from network.stream import RedisStream
 
+from logs.logger import console_logger
+
 if TYPE_CHECKING:
     from controller.time_manager import TimeManager
     from controller.order_manager import OrderManager
@@ -51,17 +53,31 @@ class NetworkAgent:
         self.order_manager = order_manager
         self.message_cache = message_cache
         self.logger = logger
+        self._publish_lock = asyncio.Lock()
+        self._consumer_task: Optional[asyncio.Task] = None
 
     async def start(self):
         """Initialize consumer group and start listening for messages."""
         await self.stream_client.create_consumer_group(self.stream_name, self.stream_group)
-        asyncio.create_task(self.consume_stream())
+        if self._consumer_task is None or self._consumer_task.done():
+            self._consumer_task = asyncio.create_task(self.consume_stream())
         await self.is_consuming.wait()
-        print(f"Agent {self.id} started and is listening for messages.")
+        console_logger.info(f"Agent {self.id} started and is listening for messages.")
+
+    async def stop(self):
+        """Stop background consumption (useful for notebook reruns/cleanup)."""
+        task = self._consumer_task
+        self._consumer_task = None
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     async def consume_stream(self):
         """Consume messages from the Redis stream and process them."""
-        print(f"Agent {self.id} is consuming from stream '{self.stream_name}' as part of group '{self.stream_group}'.")
+        console_logger.info(f"Agent {self.id} is consuming from stream '{self.stream_name}' as part of group '{self.stream_group}'.")
         self.is_consuming.set()
         async for message_id, message_data in self.stream_client.consume_messages(
             self.stream_name, self.stream_group, self.consumer_name
@@ -69,11 +85,11 @@ class NetworkAgent:
             sender_id = message_data.get('sender_id')
             if sender_id == self.id:
                 # Ignore own messages
-                print(f"Agent {self.id} ignored its own message {message_id}.")
+                console_logger.info(f"Agent {self.id} ignored its own message {message_id}.")
                 await asyncio.sleep(0.1)
                 continue
 
-            print(f"Agent {self.id} received message {message_id}: {message_data}")
+            # console_logger.info(f"Agent {self.id} received message {message_id}: {message_data}")
             prompt = message_data.get('content', '')
             if not prompt:
                 continue
@@ -83,7 +99,7 @@ class NetworkAgent:
                 if not self.order_manager.is_my_turn(self.id):
                     # Not our turn, skip responding
                     designated = self.order_manager.get_designated_responder()
-                    print(f"Agent {self.id} skipped (designated responder is {designated}).")
+                    console_logger.info(f"Agent {self.id} skipped (designated responder is {designated}).")
                     continue
                 # Clear the designation since we're responding
                 self.order_manager.clear_designated_responder()
@@ -103,17 +119,16 @@ class NetworkAgent:
 
     async def _do_publish(self, message: str):
         """Internal publish: designate next responder FIRST, then send to stream, cache, and log."""
-        message_data = {'sender_id': self.id, 'content': message}
+        async with self._publish_lock:
+            message_data = {'sender_id': self.id, 'content': message}
 
-        # IMPORTANT: Designate the next responder BEFORE publishing the message
-        # This prevents race conditions where other agents receive the message
-        # before knowing who should respond
-        if self.order_manager:
-            next_responder = self.order_manager.select_and_store_next_responder(exclude_agent_id=self.id)
-            print(f"Agent {self.id} designating next responder: {next_responder}")
+            # Designate the next responder BEFORE publishing the message
+            if self.order_manager:
+                next_responder = self.order_manager.select_and_store_next_responder(exclude_agent_id=self.id)
+                console_logger.info(f"Agent {self.id} designating next responder: {next_responder}")
 
-        # Now publish the message (other agents will see the designated responder)
-        await self.stream_client.publish_message(self.stream_name, message_data)
+            # Now publish the message (other agents will see the designated responder)
+            await self.stream_client.publish_message(self.stream_name, message_data)
 
         # Append to RedisCache (per-agent message history)
         if self.message_cache:
@@ -123,24 +138,49 @@ class NetworkAgent:
         if self.logger:
             await self.logger.async_log_publish(self.id, message)
 
-        print(f"Agent {self.id} published message.")
+            console_logger.debug(f"Agent {self.id} published message.")
 
     async def generate_response(self, prompt: str) -> str:
         """Generate a response using the OpenAI API."""
-        print(f"Agent {self.id} is generating response")
+        console_logger.info(f"Agent {self.id} is generating response")
         try:
+            # Build assistant context from recent messages across all agents
+            recent_messages = ""
+            if self.message_cache:
+                agents_list = None
+                if self.order_manager and getattr(self.order_manager, "agents", None):
+                    agents_list = self.order_manager.agents
+                else:
+                    # fallback to only this agent
+                    agents_list = [self]
+
+                parts = []
+                for a in agents_list:
+                    try:
+                        items = await self.message_cache.get_responses(a.id, last_n=5)
+                    except Exception:
+                        console_logger.error(f"Error fetching messages for agent {a.id} from cache.")
+                        items = []
+                    # normalize items to strings
+                    normalized = [str(item) for item in items]
+                    if normalized:
+                        parts.append(f"{a.id}: " + " | ".join(normalized))
+
+                recent_messages = "\n".join(parts)
+            # console_logger.info(f"Agent {self.id} recent messages for context: {recent_messages}")
             response = client.responses.create(
                 model="gpt-4o-mini",
                 input=[
                     {"role": "system", "content": self.init_prompt},
-                    {"role": "user", "content": prompt}
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": recent_messages}
                 ],
                 temperature=0.7,
                 max_output_tokens=300
             )
-            print(f"Agent {self.id} generated response: {response.output_text}")
+            # console_logger.info(f"Agent {self.id} generated response: {response.output_text}")
             return response.output_text
         except Exception as e:
-            print(f"Error generating response for agent {self.id}: {e}")
+            console_logger.error(f"Error generating response for agent {self.id}: {e}")
             return "I'm sorry, I couldn't process that."
         

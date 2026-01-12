@@ -19,6 +19,18 @@ REDIS_HOST = "localhost"
 REDIS_PORT = 6379
 RUN_DURATION_SECONDS = 60  # How long to run the demo
 
+initial_prompt_template = (
+    "You are agent {agent_id} in a multi-agent social network debate about '{topic}'. " \
+    "You strongly believe in the following statement: {unique_prompt} " \
+    "Defend this statement in your responses. Prove your point is correct compared to others." \
+    "Respond thoughtfully and concisely, keeping the conversation going."
+)
+
+converstation_starter = (
+    "Let's begin our discussion about {topic}. " \
+    "What are your initial thoughts on this subject?"
+)
+
 
 async def main():
     console_logger.info("Starting LLM Network...")
@@ -45,10 +57,10 @@ async def main():
     agents = []
     for i in range(NUM_AGENTS):
         agent_id = f"agent_{i+1}"
-        init_prompt = (
-            f"You are agent {i+1} in a multi-agent discussion about '{topic}'. "
-            f"{agent_prompts[i]} "
-            "Respond thoughtfully and concisely, keeping the conversation going."
+        init_prompt = initial_prompt_template.format(
+            agent_id=i+1,
+            topic=topic,
+            unique_prompt=agent_prompts[i]
         )
         agent = NetworkAgent(
             id=agent_id,
@@ -84,11 +96,8 @@ async def main():
     console_logger.info(f"All {NUM_AGENTS} agents are running.")
 
     # 5. Kick off the conversation with an initial message from the first agent
-    initial_message = (
-        f"Let's begin our discussion about {topic}. "
-        "What are your initial thoughts on this subject?"
-    )
-    console_logger.info(f"Agent 1 starting conversation: {initial_message}")
+    initial_message = converstation_starter.format(topic=topic)
+    console_logger.info(f"Agent 1 starting conversation:")
     await agents[0].publish_message(initial_message)
 
     # 6. Run for the specified duration
@@ -97,6 +106,7 @@ async def main():
 
     # 7. Cleanup
     console_logger.info("Shutting down...")
+
     await logger.async_stop()
     await message_cache.close()
     console_logger.info("Done.")
