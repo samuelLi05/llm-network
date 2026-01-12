@@ -46,7 +46,7 @@ python main.py
 
 - Notebook: open the Jupyter notebook and run the cells
 
-Open [main_runner.ipynb](main_runner.ipynb) in Jupyter or VS Code and run the cells. The notebook uses nested event loop handling via `nest_asyncio` so it can be run inside Jupyter.
+Open [llm_network.ipynb](llm_network.ipynb) in Jupyter or VS Code and run the cells. The notebook uses nested event loop handling via `nest_asyncio` so it can be run inside Jupyter.
 
 ## Notes on Jupyter & Python versions
 
