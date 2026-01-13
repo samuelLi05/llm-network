@@ -90,8 +90,8 @@ class NetworkAgent:
                 continue
 
             # console_logger.info(f"Agent {self.id} received message {message_id}: {message_data}")
-            prompt = message_data.get('content', '')
-            if not prompt:
+            incoming_post = message_data.get('content', '')
+            if not incoming_post:
                 continue
 
             # Check if this agent is the designated responder (OrderManager logic)
@@ -105,7 +105,16 @@ class NetworkAgent:
                 self.order_manager.clear_designated_responder()
 
             # Generate and publish response
-            response = await self.generate_response(prompt)
+            wrapped_prompt = (
+                "React to the post below in your own voice. " \
+                "Do NOT copy or paraphrase it line-by-line. " \
+                "Write a NEW, distinct social-media-style post that reflects your fixed stance and worldview, " \
+                "and directly contradict at least one implied assumption in the original post. " \
+                "Keep it attention-grabbing, concise, and assertive.\n" \
+                "POST TO REACT TO:\n" \
+                f"{incoming_post}"
+            )
+            response = await self.generate_response(wrapped_prompt)
             await self.publish_message(response)
 
     async def publish_message(self, message: str):
@@ -140,10 +149,15 @@ class NetworkAgent:
 
             console_logger.debug(f"Agent {self.id} published message.")
 
-    async def generate_response(self, prompt: str) -> str:
+    async def generate_response(self, prompt: Optional[str] = None) -> str:
         """Generate a response using the OpenAI API."""
         console_logger.info(f"Agent {self.id} is generating response")
         try:
+            last_message = (prompt or "").strip()
+            if not last_message:
+                # Helps avoid an empty user message on the first post.
+                last_message = "Write your next post."
+
             # Build assistant context from recent messages across all agents
             recent_messages = ""
             if self.message_cache:
@@ -157,6 +171,7 @@ class NetworkAgent:
                 parts = []
                 for a in agents_list:
                     try:
+                        console_logger.debug(f"Agent {self.id} fetching cache for {a.id}...")
                         items = await self.message_cache.get_responses(a.id, last_n=5)
                     except Exception:
                         console_logger.error(f"Error fetching messages for agent {a.id} from cache.")
@@ -168,18 +183,26 @@ class NetworkAgent:
 
                 recent_messages = "\n".join(parts)
             # console_logger.info(f"Agent {self.id} recent messages for context: {recent_messages}")
-            response = client.responses.create(
-                model="gpt-4o-mini",
-                input=[
-                    {"role": "system", "content": self.init_prompt},
-                    {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": recent_messages}
-                ],
-                temperature=0.7,
-                max_output_tokens=300
+            console_logger.debug(f"Agent {self.id} calling OpenAI responses API...")
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.responses.create,
+                    model="gpt-4o-mini",
+                    input=[
+                        {"role": "system", "content": self.init_prompt},
+                        {"role": "user", "content": last_message},
+                        {"role": "assistant", "content": recent_messages},
+                    ],
+                    temperature=0.7,
+                    max_output_tokens=300,
+                ),
+                timeout=60,
             )
             # console_logger.info(f"Agent {self.id} generated response: {response.output_text}")
             return response.output_text
+        except asyncio.TimeoutError:
+            console_logger.error(f"Timed out generating response for agent {self.id} (Redis/OpenAI timeout).")
+            return "I'm sorry, I timed out while generating a response."
         except Exception as e:
             console_logger.error(f"Error generating response for agent {self.id}: {e}")
             return "I'm sorry, I couldn't process that."

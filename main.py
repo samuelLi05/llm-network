@@ -20,17 +20,12 @@ REDIS_PORT = 6379
 RUN_DURATION_SECONDS = 100
 
 initial_prompt_template = (
-    "You are agent {agent_id} in a multi-agent social network debate about '{topic}'. " \
-    "You strongly believe in the following statement: {unique_prompt} " \
-    "Defend this statement in your responses. Prove your point is correct compared to others." \
-    "Respond thoughtfully and concisely, keeping the conversation going."
+   "You are participating in a social-media-style discussion about {topic}." \
+   "The sentence {unique_prompt} is authoritative and exhaustive. Write entirely from the worldview, assumptions, tone, values, and constraints it defines; it fully determines what you believe, how you speak, and what claims you are willing to make." \
+   "Produce a short, attention-grabbing post that hooks readers, makes a clear and strong claim aligned with that grounding, and invites engagement (likes, replies, shares)." \
+   "Be concise, bold, and evocative. Use a memorable opening line, assertive language, and a direct call-to-action. Emulate authentic social media posts." \
+   "Do not introduce outside viewpoints, neutral framing, balance, or meta-commentary. Do not soften or qualify claims unless explicitly required by the authoritative sentence. Never refer to yourself as an agent, AI, or participant in a debate."
 )
-
-converstation_starter = (
-    "Let's begin our discussion about {topic}. " \
-    "What are your initial thoughts on this subject?"
-)
-
 
 async def main():
     console_logger.info("Starting LLM Network...")
@@ -58,7 +53,6 @@ async def main():
     for i in range(NUM_AGENTS):
         agent_id = f"agent_{i+1}"
         init_prompt = initial_prompt_template.format(
-            agent_id=i+1,
             topic=topic,
             unique_prompt=agent_prompts[i]
         )
@@ -96,7 +90,10 @@ async def main():
     console_logger.info(f"All {NUM_AGENTS} agents are running.")
 
     # 5. Kick off the conversation with an initial message from the first agent
-    initial_message = converstation_starter.format(topic=topic)
+    initial_message = await agents[0].generate_response(
+        "Write the first viral post that kicks off a heated comment thread about this topic. "
+        "Make a strong claim, then invite replies."
+    )
     console_logger.info(f"Agent 1 starting conversation:")
     await agents[0].publish_message(initial_message)
 

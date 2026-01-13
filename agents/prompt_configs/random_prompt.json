@@ -29,7 +29,17 @@
     "robotics",
     "waste management",
     "wildlife conservation",
-    "personal finance"
+    "personal finance",
+    "politics",
+    "vaccines",
+    "gun control",
+    "immigration",
+    "abortion rights",
+    "universal basic income",
+    "mandatory vaccination",
+    "death penalty",
+    "minimum wage",
+    "trade policy"
   ],
 
   "adjective": [
@@ -283,15 +293,15 @@
   ],
 
   "templates": [
-    "I firmly believe that {adjective} {topic} benefits the {nouns_people_generic}.",
-    "From the perspective of a {nouns_people_generic}, I feel {emotions_and_tones} about how {topic} seems {adjective}.",
-    "As a {nouns_people_generic}, I would {verb} {topic} because it is {adjective}.",
-    "The {nouns_locations} perspective: {topic} is {adjective} and affects {nouns_people_generic}.",
-    "Considering {abstract_concepts}, {topic} appears {adjective}; {verb} is required.",
-    "It's {adjective} when {nouns_people_generic} interact with {topic} through a {nouns_technology} in the {nouns_locations}.",
-    "My experience as a {nouns_people_generic} shows that {topic} is {adjective} and impacts {nouns_food} availability; even a {nouns_animals} can notice the change.",
-    "In terms of {abstract_concepts}, {topic} should be seen as {adjective} and we should {verb} accordingly.",
-    "Many see {topic} as {adjective}, but {nouns_people_generic} often disagree—like arguing over a {nouns_household_items} at home.",
-    "If we prioritize {abstract_concepts}, {topic} will become more {adjective} for the {nouns_people_generic}."
+    "As a {nouns_people_generic}, I vehemently assert that {adjective} {topic} is the only moral choice; opposing views betray {abstract_concepts}.",
+    "From my {nouns_locations}, {topic} is catastrophically {adjective} — I {verb} anyone who downplays this with {emotions_and_tones} intensity.",
+    "We must {verb} {adjective} {topic} using every {nouns_technology} possible; delays harm {nouns_animals} and are unforgivable.",
+    "I proudly {verb} {topic} because it produces {adjective} outcomes for {nouns_people_generic}; critics are {emotions_and_tones} and mistaken.",
+    "The {nouns_animals} suffer under current policies toward {topic}; it's {adjective} and I demand radical change to protect them.",
+    "If {abstract_concepts} matter, {topic} must prioritize {nouns_food} security over comfortable {nouns_household_items} conveniences enjoyed by elites.",
+    "From the {nouns_locations} viewpoint, mixing {topic} with unregulated {nouns_technology} creates {adjective} risks — anyone who disagrees is naive.",
+    "Many claim {topic} is {adjective}, but as a representative of {nouns_people_generic} I say it's a betrayal of {abstract_concepts} and deserves {emotions_and_tones} rebuttal.",
+    "I oppose timid approaches: {topic} needs {adjective} action now, not compromise — we should {verb} decisively and ignore hesitant critics.",
+    "Choosing {topic} without guarding {nouns_food} and the {nouns_animals} is reckless; use strict rules and treat dissenting {nouns_people_generic} views as harmful."
   ]
 }
