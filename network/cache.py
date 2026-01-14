@@ -39,6 +39,15 @@ class RedisCache:
         """Delete the entire list for this agent."""
         await self.redis.delete(self._key(agent_id))
 
+    async def clear_all(self) -> None:
+        """Delete all keys with the current prefix."""
+        cursor = b'0'
+        pattern = f"{self.prefix}*"
+        while cursor:
+            cursor, keys = await self.redis.scan(cursor=cursor, match=pattern, count=100)
+            if keys:
+                await self.redis.delete(*keys)
+
     async def close(self) -> None:
         await self.redis.close()
         await self.redis.connection_pool.disconnect() 

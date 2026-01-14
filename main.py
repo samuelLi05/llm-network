@@ -10,6 +10,7 @@ from agents.prompt_configs.generate_prompt import PromptGenerator
 from controller.time_manager import TimeManager
 from controller.order_manager import OrderManager
 from network.cache import RedisCache
+from network.stream import RedisStream
 from logs.logger import Logger, console_logger
 
 # Configuration
@@ -38,14 +39,27 @@ async def main():
     # Generate unique prompts for each agent (same topic, different wording)
     agent_prompts = prompt_generator.generate_multiple_prompts(NUM_AGENTS)
 
+    # Create dictionary of agents and their initial prompts for logging
+    agent_configs = {}
+    for i in range(NUM_AGENTS):
+        agent_id = f"agent_{i+1}"
+        init_prompt = initial_prompt_template.format(
+            topic=topic,
+            unique_prompt=agent_prompts[i]
+        )
+        agent_configs[agent_id] = init_prompt
+
     # Initialize TimeManager with 3-second global interval
     time_manager = TimeManager(global_interval=3.0)
 
     # Initialize RedisCache for storing agent message histories
     message_cache = RedisCache(host=REDIS_HOST, port=REDIS_PORT)
+    # Redis stream helper (used for cleanup)
+    redis_stream = RedisStream(host=REDIS_HOST, port=REDIS_PORT)
 
     # Initialize Logger for recording agent publishes
     logger = Logger(num_agents=NUM_AGENTS)
+    logger.log_agent_configs(agent_configs)
     console_logger.info(f"Logging publishes to: {logger.file_path}")
 
     # 2. Create agents
@@ -105,6 +119,12 @@ async def main():
     console_logger.info("Shutting down...")
 
     await logger.async_stop()
+    # Destroy consumer groups and remove the stream key
+    try:
+        await redis_stream.cleanup_stream(STREAM_NAME, num_groups=NUM_AGENTS)
+    except Exception:
+        console_logger.info("Redis stream cleanup encountered an error (continuing shutdown).")
+    await message_cache.clear_all()
     await message_cache.close()
     console_logger.info("Done.")
 

@@ -171,7 +171,7 @@ class NetworkAgent:
                 parts = []
                 for a in agents_list:
                     try:
-                        console_logger.debug(f"Agent {self.id} fetching cache for {a.id}...")
+                        # console_logger.debug(f"Agent {self.id} fetching cache for {a.id}...")
                         items = await self.message_cache.get_responses(a.id, last_n=5)
                     except Exception:
                         console_logger.error(f"Error fetching messages for agent {a.id} from cache.")

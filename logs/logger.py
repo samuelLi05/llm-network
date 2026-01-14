@@ -25,14 +25,26 @@ if not console_logger.handlers:
 class Logger:
     """Thread-safe async logger for agent publish events."""
 
-    def __init__(self, num_agents: int, log_dir: Optional[str] = None):
+    def __init__(self, num_agents: int, log_dir: Optional[str] = None, agent_config_dir: Optional[str] = None):
+        # Ensure log directories exist
         if log_dir is None:
             log_dir = os.path.join(os.path.dirname(__file__), "network_logs")
         os.makedirs(log_dir, exist_ok=True)
+
+        if agent_config_dir is None:
+            agent_config_dir = os.path.join(os.path.dirname(__file__), "agent_config_logs")
+        os.makedirs(agent_config_dir, exist_ok=True)
+
         self.file_path = os.path.join(
             log_dir, 
             time.strftime(f"log_%Y%m%d-%H%M%S_{num_agents}.log")
         )
+
+        self.agent_config_path = os.path.join(
+            agent_config_dir,
+            time.strftime(f"log_%Y%m%d-%H%M%S_{num_agents}.log")
+        )
+        # Thread-safe queue for log items
         self.log_queue: queue.Queue[Any] = queue.Queue()
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -70,6 +82,14 @@ class Logger:
         """Awaitable put: pushes item into the thread-safe queue using executor."""
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self.log_queue.put, item)
+
+    def log_agent_configs(self, configs: dict) -> None:
+        """Log the initial agent configurations to a separate file."""
+        with open(self.agent_config_path, 'w') as f:
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            f.write(f"[{timestamp}] Agent Configurations:\n")
+            for agent_id, config in configs.items():
+                f.write(f"Agent {agent_id}:\n{config}\n\n")
 
     def stop(self, timeout: float = 2.0) -> None:
         """Signal the worker thread to stop and wait for it to finish."""
