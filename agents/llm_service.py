@@ -9,7 +9,7 @@ class LLMService:
 
     def __init__(self, llm: Optional[HuggingFaceLLM] = None):
         self.llm = llm or HuggingFaceLLM()
-        self._queue: asyncio.Queue[tuple[Sequence[Dict[str, str]], dict, asyncio.Future]] = asyncio.Queue()
+        self._queue: asyncio.Queue[dict] = asyncio.Queue()
         self._worker: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
 
@@ -29,15 +29,35 @@ class LLMService:
     async def generate(self, messages: Sequence[Dict[str, str]], **kwargs: Any) -> str:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
-        await self._queue.put((messages, kwargs, fut))
+        await self._queue.put({"type": "generate", "messages": messages, "kwargs": kwargs, "future": fut})
+        return await fut
+
+    async def score_label_logprob(self, messages: Sequence[Dict[str, str]], label: str, **kwargs: Any) -> dict:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        await self._queue.put(
+            {"type": "score", "messages": messages, "label": label, "kwargs": kwargs, "future": fut}
+        )
         return await fut
 
     async def _worker_loop(self):
         while not self._stop_event.is_set():
-            messages, kwargs, fut = await self._queue.get()
+            job = await self._queue.get()
             try:
-                text = await asyncio.to_thread(self.llm.generate, messages, **kwargs)
-                fut.set_result(text)
+                if job.get("type") == "score":
+                    result = await asyncio.to_thread(
+                        self.llm.score_label_logprob,
+                        job["messages"],
+                        job["label"],
+                        **job.get("kwargs", {}),
+                    )
+                else:
+                    result = await asyncio.to_thread(
+                        self.llm.generate,
+                        job["messages"],
+                        **job.get("kwargs", {}),
+                    )
+                job["future"].set_result(result)
             except Exception as exc:
-                if not fut.done():
-                    fut.set_exception(exc)
+                if not job["future"].done():
+                    job["future"].set_exception(exc)

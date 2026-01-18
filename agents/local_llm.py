@@ -1,6 +1,7 @@
-from typing import Optional, List, Union, Sequence, Dict
+from typing import Optional, List, Union, Sequence, Dict, Iterable
 import os
 import torch
+import torch.nn.functional as F
 from transformers import (
     AutoConfig,
     AutoTokenizer,
@@ -96,34 +97,8 @@ class HuggingFaceLLM:
     ) -> str:
         max_tokens = max_new_tokens or self.max_new_tokens
         temperature = temperature or self.temperature
-
-        # Normalize prompt into Qwen-VL style messages
-        if isinstance(prompt, str):
-            messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
-        else:
-            messages = []
-            for m in prompt:
-                role = m.get("role", "user")
-                content = m.get("content", "")
-                if isinstance(content, list):
-                    # Assume content already in multimodal format
-                    normalized_content = content
-                else:
-                    # Wrap plain string content for Qwen-VL processor
-                    normalized_content = [{"type": "text", "text": str(content)}]
-                messages.append({"role": role, "content": normalized_content})
-
-        # Prepare for inference using the model's chat template
-        inputs = self.processor.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_dict=True,
-            return_tensors="pt",
-        )
-
-        # Move tensors to device (inputs is a dict-like BatchEncoding)
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        messages = self._normalize_messages(prompt)
+        inputs = self._build_inputs(messages, add_generation_prompt=True)
 
         # inference
         with torch.no_grad():
@@ -147,3 +122,85 @@ class HuggingFaceLLM:
                     text = text.split(s)[0]
 
         return text.strip()
+
+    def score_label_logprob(
+        self,
+        prompt: Union[str, Sequence[Dict[str, str]]],
+        label: str,
+        normalize: bool = True,
+    ) -> Dict[str, float]:
+        """Compute log-probability of `label` given `prompt`.
+
+        Returns a dict with raw log-prob, avg log-prob per token, and token length.
+        """
+        messages = self._normalize_messages(prompt)
+
+        # Build prompt-only inputs
+        prompt_inputs = self._build_inputs(messages, add_generation_prompt=True)
+        prompt_len = prompt_inputs["input_ids"].shape[1]
+
+        # Build full inputs with assistant label appended
+        label_messages = list(messages) + [
+            {"role": "assistant", "content": [{"type": "text", "text": label}]}
+        ]
+        full_inputs = self._build_inputs(label_messages, add_generation_prompt=False)
+
+        with torch.no_grad():
+            logits = self.model(**full_inputs).logits  # (1, seq_len, vocab)
+
+        # Align logits to target tokens (shifted by one)
+        input_ids = full_inputs["input_ids"][0]
+        next_token_logits = logits[0, :-1, :]
+        target_tokens = input_ids[1:]
+
+        # Slice label tokens range
+        start = max(prompt_len - 1, 0)
+        end = min(start + (input_ids.shape[0] - prompt_len), next_token_logits.shape[0])
+        label_logits = next_token_logits[start:end]
+        label_targets = target_tokens[start:end]
+
+        if label_logits.shape[0] == 0:
+            return {"logprob": float("-inf"), "avg_logprob": float("-inf"), "num_tokens": 0.0}
+
+        label_logps = F.log_softmax(label_logits, dim=-1).gather(
+            1, label_targets.unsqueeze(-1)
+        ).squeeze(-1)
+
+        total_logprob = float(label_logps.sum().item())
+        num_tokens = float(label_logps.shape[0])
+        avg_logprob = float(label_logps.mean().item()) if normalize else total_logprob
+
+        return {
+            "logprob": total_logprob,
+            "avg_logprob": avg_logprob,
+            "num_tokens": num_tokens,
+        }
+
+    def _normalize_messages(
+        self,
+        prompt: Union[str, Sequence[Dict[str, str]]],
+    ) -> List[Dict[str, Union[str, List[Dict[str, str]]]]]:
+        """Normalize prompt into Qwen-VL style messages."""
+        if isinstance(prompt, str):
+            return [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+
+        messages: List[Dict[str, Union[str, List[Dict[str, str]]]]] = []
+        for m in prompt:
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            if isinstance(content, list):
+                normalized_content = content
+            else:
+                normalized_content = [{"type": "text", "text": str(content)}]
+            messages.append({"role": role, "content": normalized_content})
+        return messages
+
+    def _build_inputs(self, messages: Iterable[Dict[str, str]], add_generation_prompt: bool):
+        inputs = self.processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=add_generation_prompt,
+            return_dict=True,
+            return_tensors="pt",
+        )
+        return {k: v.to(self.device) for k, v in inputs.items()}
