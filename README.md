@@ -44,6 +44,23 @@ There are two primary ways to run a conversation:
 python main.py
 ```
 
+### Local LLM (Quantized HF) Option
+
+To isolate GPU inference and avoid blocking the asyncio event loop, this project can route all local model calls through a shared `LLMService` queue.
+
+Set environment variables before running:
+
+```bash
+export USE_LOCAL_LLM=true
+export LOCAL_MODEL="Qwen/Qwen3-VL-8B-Instruct"
+export HF_TRUST_REMOTE_CODE=true
+```
+
+Notes:
+- The local LLM uses 4-bit quantization by default when `bitsandbytes` is installed.
+- If you need to inspect weights, you can load the model via the in-process `HuggingFaceLLM` class.
+- For higher concurrency, consider running a separate inference server (vLLM/TGI) and swapping the client call.
+
 - Notebook: open the Jupyter notebook and run the cells
 
 Open [llm_network.ipynb](llm_network.ipynb) in Jupyter or VS Code and run the cells. The notebook uses nested event loop handling via `nest_asyncio` so it can be run inside Jupyter.

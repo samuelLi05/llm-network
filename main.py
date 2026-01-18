@@ -5,7 +5,10 @@ TimeManager, OrderManager, RedisCache, and Logger for coordinated messaging.
 """
 
 import asyncio
+import os
 from agents.network_agent import NetworkAgent
+from agents.llm_service import LLMService
+from agents.local_llm import HuggingFaceLLM
 from agents.prompt_configs.generate_prompt import PromptGenerator
 from controller.time_manager import TimeManager
 from controller.order_manager import OrderManager
@@ -19,17 +22,26 @@ STREAM_NAME = "agent_stream"
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
 RUN_DURATION_SECONDS = 100
+USE_LOCAL_LLM = True
 
 initial_prompt_template = (
    "You are participating in a social-media-style discussion about {topic}." \
-   "The sentence {unique_prompt} is authoritative and exhaustive. Write entirely from the worldview, assumptions, tone, values, and constraints it defines; it fully determines what you believe, how you speak, and what claims you are willing to make." \
+   "The sentence {unique_prompt} is your fixed stance and is authoritative and exhaustive. Write entirely from the worldview, assumptions, tone, values, and constraints it defines; it fully determines what you believe, how you speak, and what claims you are willing to make." \
    "Produce a short, attention-grabbing post that hooks readers, makes a clear and strong claim aligned with that grounding, and invites engagement (likes, replies, shares)." \
-   "Be concise, bold, and evocative. Use a memorable opening line, assertive language, and a direct call-to-action. Emulate authentic social media posts." \
+   "Be concise, bold, and evocative. Use a distinct memorable opening line, assertive language, and a direct call-to-action every time. Emulate authentic social media posts." \
+   "Make sure posts are distinct, do not copy formatting and language of previous posts, instead contradict any claims that oppose your fixed stance"
    "Do not introduce outside viewpoints, neutral framing, balance, or meta-commentary. Do not soften or qualify claims unless explicitly required by the authoritative sentence. Never refer to yourself as an agent, AI, or participant in a debate."
 )
 
 async def main():
     console_logger.info("Starting LLM Network...")
+
+    llm_service = None
+    if USE_LOCAL_LLM:
+        console_logger.info("Using local LLM service (quantized HF model).")
+        local_llm = HuggingFaceLLM()
+        llm_service = LLMService(local_llm)
+        await llm_service.start()
 
     # 1. Initialize shared components
     prompt_generator = PromptGenerator()
@@ -81,6 +93,7 @@ async def main():
             order_manager=None,  # Will set after all agents are created
             message_cache=message_cache,
             logger=logger,
+            llm_service=llm_service,
         )
         agents.append(agent)
 
@@ -117,15 +130,27 @@ async def main():
 
     # 7. Cleanup
     console_logger.info("Shutting down...")
+    # Stop agents first to ensure they don't publish after we delete the stream/groups
+    console_logger.info("Stopping agents...")
+    for agent in agents:
+        try:
+            await agent.stop()
+        except Exception as e:
+            console_logger.info(f"Error stopping agent {agent.id}: {e}")
 
     await logger.async_stop()
+
     # Destroy consumer groups and remove the stream key
     try:
         await redis_stream.cleanup_stream(STREAM_NAME, num_groups=NUM_AGENTS)
     except Exception:
         console_logger.info("Redis stream cleanup encountered an error (continuing shutdown).")
+
     await message_cache.clear_all()
     await message_cache.close()
+
+    if llm_service:
+        await llm_service.stop()
     console_logger.info("Done.")
 
 

@@ -4,6 +4,8 @@ from typing import Optional, TYPE_CHECKING
 from dotenv import load_dotenv
 from openai import OpenAI
 from network.stream import RedisStream
+from agents.local_llm import HuggingFaceLLM as LocalLLM
+from agents.llm_service import LLMService
 
 from logs.logger import console_logger
 
@@ -38,6 +40,8 @@ class NetworkAgent:
         order_manager: Optional["OrderManager"] = None,
         message_cache: Optional["RedisCache"] = None,
         logger: Optional["Logger"] = None,
+        local_llm: Optional[LocalLLM] = None,
+        llm_service: Optional[LLMService] = None,
     ):
         self.id = id
         self.init_prompt = init_prompt
@@ -53,6 +57,8 @@ class NetworkAgent:
         self.order_manager = order_manager
         self.message_cache = message_cache
         self.logger = logger
+        self.local_llm = local_llm
+        self.llm_service = llm_service
         self._publish_lock = asyncio.Lock()
         self._consumer_task: Optional[asyncio.Task] = None
 
@@ -85,7 +91,7 @@ class NetworkAgent:
             sender_id = message_data.get('sender_id')
             if sender_id == self.id:
                 # Ignore own messages
-                console_logger.info(f"Agent {self.id} ignored its own message {message_id}.")
+                # console_logger.info(f"Agent {self.id} ignored its own message {message_id}.")
                 await asyncio.sleep(0.1)
                 continue
 
@@ -99,7 +105,7 @@ class NetworkAgent:
                 if not self.order_manager.is_my_turn(self.id):
                     # Not our turn, skip responding
                     designated = self.order_manager.get_designated_responder()
-                    console_logger.info(f"Agent {self.id} skipped (designated responder is {designated}).")
+                    # console_logger.info(f"Agent {self.id} skipped (designated responder is {designated}).")
                     continue
                 # Clear the designation since we're responding
                 self.order_manager.clear_designated_responder()
@@ -109,7 +115,7 @@ class NetworkAgent:
                 "React to the post below in your own voice. " \
                 "Do NOT copy or paraphrase it line-by-line. " \
                 "Write a NEW, distinct social-media-style post that reflects your fixed stance and worldview, " \
-                "and directly contradict at least one implied assumption in the original post. " \
+                "and directly contradict ideas from other posts to strongly support your fixed stance. " \
                 "Keep it attention-grabbing, concise, and assertive.\n" \
                 "POST TO REACT TO:\n" \
                 f"{incoming_post}"
@@ -183,23 +189,50 @@ class NetworkAgent:
 
                 recent_messages = "\n".join(parts)
             # console_logger.info(f"Agent {self.id} recent messages for context: {recent_messages}")
-            console_logger.debug(f"Agent {self.id} calling OpenAI responses API...")
-            response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    client.responses.create,
-                    model="gpt-4o-mini",
-                    input=[
-                        {"role": "system", "content": self.init_prompt},
-                        {"role": "user", "content": last_message},
-                        {"role": "assistant", "content": recent_messages},
-                    ],
-                    temperature=0.7,
-                    max_output_tokens=300,
-                ),
-                timeout=60,
-            )
-            # console_logger.info(f"Agent {self.id} generated response: {response.output_text}")
-            return response.output_text
+            # console_logger.debug(f"Agent {self.id} Generating Response")
+            if not self.local_llm and not self.llm_service:
+                # Call OpenAI responses API in a thread and await with timeout
+                response_obj = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.responses.create,
+                        model="gpt-4o-mini",
+                        input=[
+                            {"role": "system", "content": self.init_prompt},
+                            {"role": "user", "content": last_message},
+                            {"role": "assistant", "content": recent_messages},
+                        ],
+                        temperature=0.7,
+                        max_output_tokens=300,
+                    ),
+                    timeout=60,
+                )
+                # Extract the textual output
+                response = getattr(response_obj, "output_text", None) or str(response_obj)
+            else:
+                messages = [
+                    {"role": "system", "content": self.init_prompt},
+                    {"role": "user", "content": last_message},
+                    {"role": "assistant", "content": recent_messages},
+                ]
+                if self.llm_service:
+                    response = await self.llm_service.generate(
+                        messages,
+                        max_new_tokens=300,
+                        temperature=0.7,
+                        stop=None,
+                    )
+                else:
+                    # Run the local blocking generation in a thread so the asyncio loop isn't blocked
+                    response = await asyncio.to_thread(
+                        self.local_llm.generate,
+                        messages,
+                        max_new_tokens=300,
+                        temperature=0.7,
+                        stop=None,
+                    )
+                
+            # console_logger.info(f"Agent {self.id} generated response: {response}")
+            return response
         except asyncio.TimeoutError:
             console_logger.error(f"Timed out generating response for agent {self.id} (Redis/OpenAI timeout).")
             return "I'm sorry, I timed out while generating a response."

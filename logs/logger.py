@@ -42,7 +42,7 @@ class Logger:
 
         self.agent_config_path = os.path.join(
             agent_config_dir,
-            time.strftime(f"log_%Y%m%d-%H%M%S_{num_agents}.log")
+            time.strftime(f"log_%Y%m%d-%H%M%S_{num_agents}_agent_configs.log")
         )
         # Thread-safe queue for log items
         self.log_queue: queue.Queue[Any] = queue.Queue()
