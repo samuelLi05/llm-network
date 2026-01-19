@@ -25,7 +25,7 @@ if not console_logger.handlers:
 class Logger:
     """Thread-safe async logger for agent publish events."""
 
-    def __init__(self, num_agents: int, log_dir: Optional[str] = None, agent_config_dir: Optional[str] = None):
+    def __init__(self, num_agents: int, log_dir: Optional[str] = None, agent_config_dir: Optional[str] = None, stance_config_dir: Optional[str] = None):
         # Ensure log directories exist
         if log_dir is None:
             log_dir = os.path.join(os.path.dirname(__file__), "network_logs")
@@ -35,6 +35,10 @@ class Logger:
             agent_config_dir = os.path.join(os.path.dirname(__file__), "agent_config_logs")
         os.makedirs(agent_config_dir, exist_ok=True)
 
+        if stance_config_dir is None:
+            stance_config_dir = os.path.join(os.path.dirname(__file__), "stance_logs")
+        os.makedirs(stance_config_dir, exist_ok=True)
+
         self.file_path = os.path.join(
             log_dir, 
             time.strftime(f"log_%Y%m%d-%H%M%S_{num_agents}.log")
@@ -43,6 +47,11 @@ class Logger:
         self.agent_config_path = os.path.join(
             agent_config_dir,
             time.strftime(f"log_%Y%m%d-%H%M%S_{num_agents}_agent_configs.log")
+        )
+
+        self.stance_config_path = os.path.join(
+            stance_config_dir,
+            time.strftime(f"log_%Y%m%d-%H%M%S_{num_agents}_stance_configs.log")
         )
         # Thread-safe queue for log items
         self.log_queue: queue.Queue[Any] = queue.Queue()

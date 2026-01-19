@@ -24,9 +24,9 @@ REDIS_HOST = "localhost"
 REDIS_PORT = 6379
 RUN_DURATION_SECONDS = 100
 USE_LOCAL_LLM = True
-ENABLE_STANCE_WORKER = os.getenv("ENABLE_STANCE_WORKER", "false").lower() in {"1", "true", "yes"}
-STANCE_BATCH_SIZE = int(os.getenv("STANCE_BATCH_SIZE", "10"))
-STANCE_BATCH_INTERVAL = float(os.getenv("STANCE_BATCH_INTERVAL", "10"))
+ENABLE_STANCE_WORKER = True
+STANCE_BATCH_SIZE = int(os.getenv("STANCE_BATCH_SIZE", "5"))
+STANCE_BATCH_INTERVAL = float(os.getenv("STANCE_BATCH_INTERVAL", "30"))
 
 initial_prompt_template = (
    "You are participating in a social-media-style discussion about {topic}." \

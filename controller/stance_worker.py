@@ -8,6 +8,8 @@ from controller.stance_analyzer import StanceAnalyzer
 from agents.local_llm import HuggingFaceLLM as LocalLLM
 from agents.llm_service import LLMService
 
+from logs.logger import console_logger
+
 
 class StanceWorker:
     """Background worker that consumes messages and writes stance analysis results.
@@ -86,6 +88,7 @@ class StanceWorker:
             }
 
             # Per-message stance classification (OpenAI/local)
+            console_logger.debug(f"StanceWorker processing message {message_id} from {sender_id}")
             if self.use_openai:
                 try:
                     label, stance_score, chosen_prob = await self.analyzer.openai_get_log_prob_classification(content)
@@ -96,6 +99,7 @@ class StanceWorker:
                     }
                 except Exception as exc:
                     result["openai_error"] = str(exc)
+                    console_logger.error(f"OpenAI classification error for message {message_id}: {exc}")
 
             if self.use_local:
                 try:
@@ -109,6 +113,7 @@ class StanceWorker:
                         }
                 except Exception as exc:
                     result["local_error"] = str(exc)
+                    console_logger.error(f"Local classification error for message {message_id}: {exc}")
 
             await self.stance_cache.append_response(f"message:{sender_id}", result)
 
@@ -125,6 +130,7 @@ class StanceWorker:
         texts = [b["content"] for b in self._buffer]
         message_ids = [b["message_id"] for b in self._buffer]
 
+        console_logger.debug(f"Flushing similarity batch with {len(self._buffer)} messages.")
         try:
             # Offload SBERT similarity to a thread to avoid blocking
             matrix = await asyncio.to_thread(self.analyzer.find_similarity, texts)
@@ -140,4 +146,5 @@ class StanceWorker:
                 {"message_ids": message_ids, "error": str(exc), "timestamp": time.time()},
             )
         finally:
+            console_logger.debug(f"Flushed similarity batch with {len(self._buffer)} messages.")
             self._buffer.clear()
