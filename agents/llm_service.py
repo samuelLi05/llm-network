@@ -40,6 +40,20 @@ class LLMService:
         )
         return await fut
 
+    async def classify_stance(self, system_prompt: str, user_prompt: str, topic: Optional[str] = None) -> dict:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        await self._queue.put(
+            {
+                "type": "classify_stance",
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "topic": topic,
+                "future": fut,
+            }
+        )
+        return await fut
+
     async def _worker_loop(self):
         while not self._stop_event.is_set():
             job = await self._queue.get()
@@ -50,6 +64,13 @@ class LLMService:
                         job["messages"],
                         job["label"],
                         **job.get("kwargs", {}),
+                    )
+                elif job.get("type") == "classify_stance":
+                    result = await asyncio.to_thread(
+                        self.llm.classify_stance,
+                        job["system_prompt"],
+                        job["user_prompt"],
+                        job.get("topic"),
                     )
                 else:
                     result = await asyncio.to_thread(

@@ -176,6 +176,72 @@ class HuggingFaceLLM:
             "num_tokens": num_tokens,
         }
 
+    def classify_stance(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        topic: Optional[str] = None,
+    ) -> Dict[str, float]:
+        """Classify stance using log-probs for labels A/B/C/D/E.
+
+        Returns a dict with label, stance_score, chosen_prob, and probs.
+        """
+        if topic:
+            user_content = (
+                f"Classify the following user prompt into one of these options: "
+                f"'A. Strongly Pro {topic}', 'B. Moderately Pro {topic}', "
+                f"'C. Neutral', 'D. Moderately Anti {topic}', 'E. Strongly Anti {topic}'. "
+                "Provide only the letter corresponding to the classification.\n\n"
+                f"User Prompt: {user_prompt}"
+            )
+        else:
+            user_content = (
+                "Classify the following user prompt into one of these options: "
+                "'A. Strongly Pro', 'B. Moderately Pro', 'C. Neutral', 'D. Moderately Anti', 'E. Strongly Anti'. "
+                "Provide only the letter corresponding to the classification.\n\n"
+                f"User Prompt: {user_prompt}"
+            )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+
+        logprob_a = self.score_label_logprob(messages, "A", normalize=False)["logprob"]
+        logprob_b = self.score_label_logprob(messages, "B", normalize=False)["logprob"]
+        logprob_c = self.score_label_logprob(messages, "C", normalize=False)["logprob"]
+        logprob_d = self.score_label_logprob(messages, "D", normalize=False)["logprob"]
+        logprob_e = self.score_label_logprob(messages, "E", normalize=False)["logprob"]
+
+        prob_a = float(torch.exp(torch.tensor(logprob_a)))
+        prob_b = float(torch.exp(torch.tensor(logprob_b)))
+        prob_c = float(torch.exp(torch.tensor(logprob_c)))
+        prob_d = float(torch.exp(torch.tensor(logprob_d)))
+        prob_e = float(torch.exp(torch.tensor(logprob_e)))
+
+        total = prob_a + prob_b + prob_c + prob_d + prob_e
+        if total == 0:
+            probs = {"A": 0.0, "B": 0.0, "C": 0.0, "D": 0.0, "E": 0.0}
+        else:
+            probs = {
+                "A": prob_a / total,
+                "B": prob_b / total,
+                "C": prob_c / total,
+                "D": prob_d / total,
+                "E": prob_e / total,
+            }
+
+        label = max(probs, key=probs.get)
+        weights = {"A": 1.0, "B": 0.5, "C": 0.0, "D": -0.5, "E": -1.0}
+        stance_score = sum(probs[k] * weights[k] for k in probs)
+
+        return {
+            "label": label,
+            "stance_score": stance_score,
+            "chosen_prob": probs[label],
+            "probs": probs,
+        }
+
     def _normalize_messages(
         self,
         prompt: Union[str, Sequence[Dict[str, str]]],
