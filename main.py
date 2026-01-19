@@ -12,6 +12,7 @@ from agents.local_llm import HuggingFaceLLM
 from agents.prompt_configs.generate_prompt import PromptGenerator
 from controller.time_manager import TimeManager
 from controller.order_manager import OrderManager
+from controller.stance_worker import StanceWorker
 from network.cache import RedisCache
 from network.stream import RedisStream
 from logs.logger import Logger, console_logger
@@ -23,6 +24,9 @@ REDIS_HOST = "localhost"
 REDIS_PORT = 6379
 RUN_DURATION_SECONDS = 100
 USE_LOCAL_LLM = True
+ENABLE_STANCE_WORKER = os.getenv("ENABLE_STANCE_WORKER", "false").lower() in {"1", "true", "yes"}
+STANCE_BATCH_SIZE = int(os.getenv("STANCE_BATCH_SIZE", "10"))
+STANCE_BATCH_INTERVAL = float(os.getenv("STANCE_BATCH_INTERVAL", "10"))
 
 initial_prompt_template = (
    "You are participating in a social-media-style discussion about {topic}." \
@@ -42,6 +46,8 @@ async def main():
         local_llm = HuggingFaceLLM()
         llm_service = LLMService(local_llm)
         await llm_service.start()
+    else:
+        local_llm = None
 
     # 1. Initialize shared components
     prompt_generator = PromptGenerator()
@@ -109,14 +115,33 @@ async def main():
     for agent in agents:
         agent.order_manager = order_manager
 
-    # 4. Start all agents
+    # 4. Start stance worker (optional)
+    stance_worker = None
+    if ENABLE_STANCE_WORKER:
+        stance_worker = StanceWorker(
+            topic=topic,
+            stream_name=STREAM_NAME,
+            group_name="stance_group",
+            consumer_name="stance_consumer",
+            redis_host=REDIS_HOST,
+            redis_port=REDIS_PORT,
+            batch_size=STANCE_BATCH_SIZE,
+            batch_interval=STANCE_BATCH_INTERVAL,
+            local_llm=local_llm,
+            llm_service=llm_service,
+            use_openai=bool(os.getenv("OPENAI_API_KEY")),
+        )
+        await stance_worker.start()
+        console_logger.info("StanceWorker started.")
+
+    # 5. Start all agents
     console_logger.info("Starting agents...")
     for agent in agents:
         await agent.start()
 
     console_logger.info(f"All {NUM_AGENTS} agents are running.")
 
-    # 5. Kick off the conversation with an initial message from the first agent
+    # 6. Kick off the conversation with an initial message from the first agent
     initial_message = await agents[0].generate_response(
         "Write the first viral post that kicks off a heated comment thread about this topic. "
         "Make a strong claim, then invite replies."
@@ -124,11 +149,11 @@ async def main():
     console_logger.info(f"Agent 1 starting conversation:")
     await agents[0].publish_message(initial_message)
 
-    # 6. Run for the specified duration
+    # 7. Run for the specified duration
     console_logger.info(f"Running for {RUN_DURATION_SECONDS} seconds...")
     await asyncio.sleep(RUN_DURATION_SECONDS)
 
-    # 7. Cleanup
+    # 8. Cleanup
     console_logger.info("Shutting down...")
     # Stop agents first to ensure they don't publish after we delete the stream/groups
     console_logger.info("Stopping agents...")
@@ -139,6 +164,9 @@ async def main():
             console_logger.info(f"Error stopping agent {agent.id}: {e}")
 
     await logger.async_stop()
+
+    if stance_worker:
+        await stance_worker.stop()
 
     # Destroy consumer groups and remove the stream key
     try:
