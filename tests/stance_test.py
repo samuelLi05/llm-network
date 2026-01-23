@@ -10,7 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from dotenv import load_dotenv
 load_dotenv()
 
-from controller.stance_analyzer import StanceAnalyzer
+from controller.stance_analysis.baseline_analyzer import BaselineAnalyzer
 from agents.local_llm import HuggingFaceLLM
 from agents.llm_service import LLMService
 
@@ -74,7 +74,7 @@ async def run_topic_tests(
 ):
 	print(f"\n=== Topic: {topic} ===")
 
-	analyzer = StanceAnalyzer(topic, local_llm=local_llm, llm_service=llm_service)
+	analyzer = BaselineAnalyzer(topic, local_llm=local_llm, llm_service=llm_service)
 
 	num_per_stance = int(os.getenv("NUM_POSTS_PER_STANCE", "2"))
 	samples: List[Tuple[str, str]] = []
@@ -131,7 +131,7 @@ async def run_topic_tests(
 
 	# Pairwise similarity of the generated posts (optional)
 	try:
-		similarity_matrix = analyzer.find_similarity([s[1] for s in samples])
+		similarity_matrix = analyzer.local_sbert_find_similarity([s[1] for s in samples])
 		if similarity_matrix is not None:
 			print("\nPairwise similarity matrix (SBERT):")
 			for row in similarity_matrix:

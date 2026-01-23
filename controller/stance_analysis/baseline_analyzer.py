@@ -13,7 +13,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 """Analyzes the stance of text prompts using LLMs and SBERT."""
-class StanceAnalyzer:
+class BaselineAnalyzer:
     def __init__(self, topic:str, local_llm: Optional[LocalLLM] = None, llm_service: Optional[LLMService] = None):
         self.topic = topic
         self.init_prompt = f"You are an expert stance analyzer for the topic: {self.topic}. Analyze the stance of given texts."
@@ -29,36 +29,49 @@ class StanceAnalyzer:
     async def openai_get_log_prob_classification(self, prompt:str) -> Optional[tuple[str, float, float]]:
         response = await asyncio.wait_for(
             asyncio.to_thread(
-                client.chat.completions.create,
+                client.responses.create,
                 model="gpt-4o-mini",
-                messages=[
+                input=[
                     {"role": "system", "content": self.init_prompt},
                     {"role": "user", "content": (
-                        f"Classify the folowing user pormpt into one of these options: "
+                        "Classify the following user prompt into one of these options: "
                         f"'A. Strongly Pro {self.topic}', "
                         f"'B. Moderately Pro {self.topic}', "
                         "'C. Neutral', "
                         f"'D. Moderately Anti {self.topic}', "
                         f"'E. Strongly Anti {self.topic}'. "
-                        "Provide only the letter corresponding to the classification.\n\n"
+                        "Respond with only the single letter (A, B, C, D, or E).\n\n"
                         "User Prompt: " + prompt
                     )},
                 ],
-                temperature=0,
-                max_tokens=1,
-                logprobs=True,
-                top_logprobs=5,
-            ), 
+                temperature=0.4,
+                max_output_tokens=16,
+                top_logprobs=20,
+                include=["message.output_text.logprobs"],
+                text={"format": {"type": "text"}},
+            ),
             timeout=60
         )
 
-        choice = response.choices[0]
-        logprobs = getattr(choice, "logprobs", None)
-        content_lp = getattr(logprobs, "content", None) if logprobs else None
-        if not content_lp:
+        logprob_items = None
+        for item in getattr(response, "output", []) or []:
+            if getattr(item, "type", None) == "message" and getattr(item, "role", None) == "assistant":
+                for part in getattr(item, "content", []) or []:
+                    if getattr(part, "type", None) == "output_text":
+                        logprob_items = getattr(part, "logprobs", None)
+                        if logprob_items:
+                            break
+            if logprob_items:
+                break
+
+        if not logprob_items:
             return None
 
-        top_logprobs = content_lp[0].top_logprobs or []
+        first = logprob_items[0]
+        top_logprobs = getattr(first, "top_logprobs", None) or []
+        if not top_logprobs:
+            return None
+
         logprob_map = {}
         for item in top_logprobs:
             token = getattr(item, "token", "")
@@ -77,8 +90,8 @@ class StanceAnalyzer:
 
         total = prob_a + prob_b + prob_c + prob_d + prob_e
         if not total:
-            return {"A": 0.0, "B": 0.0, "C": 0.0, "D": 0.0, "E": 0.0}
-        
+            return None
+
         probs = {
             "A": prob_a / total,
             "B": prob_b / total,
@@ -107,7 +120,7 @@ class StanceAnalyzer:
         return None
         
 
-    def find_similarity(self, sentnces: list[str]) -> list[list[float]]:
+    def local_sbert_find_similarity(self, sentnces: list[str]) -> list[list[float]]:
         # Use SBERT here for a simliarty check for opinion mining using pre trained hugging face model
         embeddings = self.sbert_stance_analysis_model.encode(
             sentnces,
