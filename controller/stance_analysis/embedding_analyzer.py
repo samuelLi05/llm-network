@@ -6,6 +6,8 @@ from openai import OpenAI
 from agents.local_llm import HuggingFaceLLM as LocalLLM
 from agents.llm_service import LLMService
 
+from controller.stance_analysis.vector_ops import dot_similarity_normalized, l2_normalize, mean_vector
+
 # Load in API key
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -50,25 +52,6 @@ class EmbeddingAnalyzer:
         )
         return [item.embedding for item in response.data]
 
-    @staticmethod
-    def _mean_vector(vectors: list[list[float]]) -> list[float]:
-        if not vectors:
-            return []
-        dim = len(vectors[0])
-        acc = [0.0] * dim
-        for vec in vectors:
-            for i, v in enumerate(vec):
-                acc[i] += v
-        n = float(len(vectors))
-        return [v / n for v in acc]
-
-    @staticmethod
-    def _l2_normalize(vec: list[float]) -> list[float]:
-        norm = math.sqrt(sum(v * v for v in vec))
-        if not norm:
-            return vec
-        return [v / norm for v in vec]
-
     async def _ensure_anchor_embeddings(self) -> None:
         if self._anchor_group_embeddings is not None and self._topic_embedding is not None:
             return
@@ -91,23 +74,11 @@ class EmbeddingAnalyzer:
         group_embeddings: dict[str, list[float]] = {}
         for name in group_names:
             s = group_slices[name]
-            centroid = self._mean_vector(anchor_vectors[s])
-            group_embeddings[name] = self._l2_normalize(centroid)
+            centroid = mean_vector(anchor_vectors[s])
+            group_embeddings[name] = l2_normalize(centroid)
 
         self._anchor_group_embeddings = group_embeddings
-        self._topic_embedding = self._l2_normalize(topic_vec)
-
-    @staticmethod
-    def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
-        dot = 0.0
-        norm_a = 0.0
-        norm_b = 0.0
-        for a, b in zip(vec_a, vec_b):
-            dot += a * b
-            norm_a += a * a
-            norm_b += b * b
-        denom = math.sqrt(norm_a) * math.sqrt(norm_b)
-        return dot / denom if denom else 0.0
+        self._topic_embedding = l2_normalize(topic_vec)
 
     def _softmax(self, scores: list[float]) -> list[float]:
         if not scores:
@@ -122,26 +93,42 @@ class EmbeddingAnalyzer:
         return [v / total for v in exp_scores]
 
     async def embedding_classification(self, prompt: str) -> Optional[dict]:
+        return await self.embed_and_score(prompt, include_vector=False)
+
+    async def embed_and_score(self, prompt: str, *, include_vector: bool = False) -> Optional[dict]:
         await self._ensure_anchor_embeddings()
         if not self._anchor_group_embeddings or self._topic_embedding is None:
             return None
 
-        prompt_vec = self._l2_normalize((await self._embed_texts([prompt]))[0])
+        prompt_vec = l2_normalize((await self._embed_texts([prompt]))[0])
+        return await self.score_vector(prompt_vec, include_vector=include_vector)
 
-        sim_pro = self._cosine_similarity(prompt_vec, self._anchor_group_embeddings["pro"])
-        sim_anti = self._cosine_similarity(prompt_vec, self._anchor_group_embeddings["anti"])
-        sim_neutral = self._cosine_similarity(prompt_vec, self._anchor_group_embeddings["neutral"])
-        topic_similarity = self._cosine_similarity(prompt_vec, self._topic_embedding)
+    async def score_vector(self, vector: list[float], *, include_vector: bool = False) -> Optional[dict]:
+        """Score an already-embedded vector against this topic's anchor frame.
+
+        This is the key for precomputed agent profiles: no embedding call required.
+        The input vector should already be L2-normalized.
+        """
+        await self._ensure_anchor_embeddings()
+        if not self._anchor_group_embeddings or self._topic_embedding is None:
+            return None
+
+        prompt_vec = l2_normalize(vector)
+
+        sim_pro = dot_similarity_normalized(prompt_vec, self._anchor_group_embeddings["pro"])
+        sim_anti = dot_similarity_normalized(prompt_vec, self._anchor_group_embeddings["anti"])
+        sim_neutral = dot_similarity_normalized(prompt_vec, self._anchor_group_embeddings["neutral"])
+        topic_similarity = dot_similarity_normalized(prompt_vec, self._topic_embedding)
 
         # Topic stance axis: project prompt onto (pro - anti) direction.
         axis = [a - b for a, b in zip(self._anchor_group_embeddings["pro"], self._anchor_group_embeddings["anti"]) ]
-        axis = self._l2_normalize(axis)
-        stance_score = self._cosine_similarity(prompt_vec, axis)
+        axis = l2_normalize(axis)
+        stance_score = dot_similarity_normalized(prompt_vec, axis)
 
         # Strength: how opinionated w.r.t. this topic (high when far from neutral AND on-topic)
         strength = max(0.0, topic_similarity) * (1.0 - max(0.0, sim_neutral))
 
-        return {
+        result = {
             "topic_similarity": topic_similarity,
             "stance_score": stance_score,
             "strength": strength,
@@ -152,4 +139,9 @@ class EmbeddingAnalyzer:
             },
             "model": self.embedding_model,
         }
+
+        if include_vector:
+            result["vector"] = prompt_vec
+
+        return result
 

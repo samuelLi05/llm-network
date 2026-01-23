@@ -4,7 +4,7 @@ from typing import Optional, List, Dict, Any
 
 from network.stream import RedisStream
 from network.cache import RedisCache
-from controller.stance_analyzer import StanceAnalyzer
+from controller.stance_analysis.baseline_analyzer import StanceAnalyzer
 from agents.local_llm import HuggingFaceLLM as LocalLLM
 from agents.llm_service import LLMService
 
