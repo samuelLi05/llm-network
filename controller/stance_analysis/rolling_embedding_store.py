@@ -53,6 +53,52 @@ class RollingEmbeddingStore:
         self.redis_key = redis_key or f"stance_embeddings:{topic}"
         self.max_items = max_items
         self._items: list[EmbeddedPost] = []
+        self._id_to_index: dict[str, int] = {}
+
+        # Cached matrix view for fast retrieval
+        self._dirty_matrix: bool = True
+        self._matrix: Optional[np.ndarray] = None  # shape: (N, D), float32
+        self._stance: Optional[np.ndarray] = None  # shape: (N,), float32
+        self._strength: Optional[np.ndarray] = None  # shape: (N,), float32
+        self._topic_sim: Optional[np.ndarray] = None  # shape: (N,), float32
+        self._sender_ids: Optional[list[Optional[str]]] = None
+
+    def _mark_dirty(self) -> None:
+        self._dirty_matrix = True
+
+    def _rebuild_id_index(self) -> None:
+        self._id_to_index = {item.id: i for i, item in enumerate(self._items)}
+
+    def get_by_id(self, post_id: str) -> Optional[EmbeddedPost]:
+        idx = self._id_to_index.get(str(post_id))
+        if idx is None:
+            return None
+        if idx < 0 or idx >= len(self._items):
+            return None
+        return self._items[idx]
+
+    def _ensure_matrix(self) -> None:
+        if not self._dirty_matrix and self._matrix is not None:
+            return
+
+        if not self._items:
+            self._matrix = None
+            self._stance = None
+            self._strength = None
+            self._topic_sim = None
+            self._sender_ids = None
+            self._dirty_matrix = False
+            return
+
+        self._matrix = np.stack([item.vector for item in self._items]).astype(np.float32, copy=False)
+        self._stance = np.asarray([item.stance_score for item in self._items], dtype=np.float32)
+        self._strength = np.asarray([item.strength for item in self._items], dtype=np.float32)
+        self._topic_sim = np.asarray([item.topic_similarity for item in self._items], dtype=np.float32)
+        self._sender_ids = [
+            (item.metadata.get("sender_id") if isinstance(item.metadata, dict) else None)
+            for item in self._items
+        ]
+        self._dirty_matrix = False
 
     @staticmethod
     def _serialize_item(item: EmbeddedPost) -> dict[str, Any]:
@@ -111,6 +157,52 @@ class RollingEmbeddingStore:
         self._items.append(item)
         if len(self._items) > self.max_items:
             self._items = self._items[-self.max_items :]
+        self._rebuild_id_index()
+        self._mark_dirty()
+
+        if persist and self.redis_cache:
+            await self.redis_cache.append_response(self.redis_key, self._serialize_item(item))
+
+        return item
+
+    async def add_scored_vector(
+        self,
+        *,
+        id: str,
+        text: str,
+        vector: list[float] | np.ndarray,
+        scored: dict[str, Any],
+        created_at: Optional[float] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        persist: bool = True,
+    ) -> EmbeddedPost:
+        """Add a post using a precomputed embedding vector and score dict.
+
+        Use this when integrating with streams: embed/score once, then index.
+        Expects `scored` to contain: model, topic_similarity, stance_score, strength.
+        """
+        created_at = float(created_at if created_at is not None else time.time())
+        metadata = metadata or {}
+
+        item = EmbeddedPost(
+            id=str(id),
+            topic=self.topic,
+            text=text,
+            created_at=created_at,
+            embedding_model=str(scored.get("model") or self.analyzer.embedding_model),
+            vector=to_np(vector, dtype=np.float32),
+            topic_similarity=float(scored["topic_similarity"]),
+            stance_score=float(scored["stance_score"]),
+            strength=float(scored["strength"]),
+            anchor_group_similarities=dict(scored.get("anchor_group_similarities", {})),
+            metadata=dict(metadata),
+        )
+
+        self._items.append(item)
+        if len(self._items) > self.max_items:
+            self._items = self._items[-self.max_items :]
+        self._rebuild_id_index()
+        self._mark_dirty()
 
         if persist and self.redis_cache:
             await self.redis_cache.append_response(self.redis_key, self._serialize_item(item))
@@ -134,6 +226,8 @@ class RollingEmbeddingStore:
             except Exception:
                 continue
         self._items = items
+        self._rebuild_id_index()
+        self._mark_dirty()
         return len(self._items)
 
     async def recommend(
@@ -167,21 +261,45 @@ class RollingEmbeddingStore:
             metadata={},
         )
 
-        scored: list[tuple[float, EmbeddedPost]] = []
-        for item in self._items:
-            if item.topic_similarity < min_topic_similarity or item.strength < min_strength:
-                continue
-            if exclude_sender_id is not None and item.metadata.get("sender_id") == exclude_sender_id:
-                continue
-            d = self._distance(query, item, alpha=alpha, beta=beta, gamma=gamma)
-            scored.append((d, item))
+        if not self._items:
+            return []
 
-        scored.sort(key=lambda x: x[0])
+        self._ensure_matrix()
+        if self._matrix is None or self._stance is None or self._strength is None or self._topic_sim is None:
+            return []
+
+        # Candidate mask
+        mask = (self._topic_sim >= float(min_topic_similarity)) & (self._strength >= float(min_strength))
+        if exclude_sender_id is not None and self._sender_ids is not None:
+            exclude_mask = np.asarray(
+                [sid == exclude_sender_id for sid in self._sender_ids],
+                dtype=bool,
+            )
+            mask = mask & (~exclude_mask)
+
+        if not bool(mask.any()):
+            return []
+
+        qv = query.vector.astype(np.float32, copy=False)
+        dots = self._matrix @ qv
+
+        distances = (
+            float(alpha) * np.abs(self._stance - float(query.stance_score))
+            + float(beta) * np.abs(self._strength - float(query.strength))
+            + float(gamma) * (1.0 - dots)
+        )
+
+        distances = np.where(mask, distances, np.inf)
+        k = min(int(top_k), int(mask.sum()))
+        idx = np.argpartition(distances, kth=k - 1)[:k]
+        idx = idx[np.argsort(distances[idx])]
+
         results: list[dict[str, Any]] = []
-        for d, item in scored[:top_k]:
+        for i in idx.tolist():
+            item = self._items[i]
             results.append(
                 {
-                    "distance": float(d),
+                    "distance": float(distances[i]),
                     "id": item.id,
                     "created_at": item.created_at,
                     "text": item.text,
@@ -225,21 +343,44 @@ class RollingEmbeddingStore:
             metadata={},
         )
 
-        scored: list[tuple[float, EmbeddedPost]] = []
-        for item in self._items:
-            if item.topic_similarity < min_topic_similarity or item.strength < min_strength:
-                continue
-            if exclude_sender_id is not None and item.metadata.get("sender_id") == exclude_sender_id:
-                continue
-            d = self._distance(query, item, alpha=alpha, beta=beta, gamma=gamma)
-            scored.append((d, item))
+        if not self._items:
+            return []
 
-        scored.sort(key=lambda x: x[0])
+        self._ensure_matrix()
+        if self._matrix is None or self._stance is None or self._strength is None or self._topic_sim is None:
+            return []
+
+        mask = (self._topic_sim >= float(min_topic_similarity)) & (self._strength >= float(min_strength))
+        if exclude_sender_id is not None and self._sender_ids is not None:
+            exclude_mask = np.asarray(
+                [sid == exclude_sender_id for sid in self._sender_ids],
+                dtype=bool,
+            )
+            mask = mask & (~exclude_mask)
+
+        if not bool(mask.any()):
+            return []
+
+        qv = query.vector.astype(np.float32, copy=False)
+        dots = self._matrix @ qv
+
+        distances = (
+            float(alpha) * np.abs(self._stance - float(query.stance_score))
+            + float(beta) * np.abs(self._strength - float(query.strength))
+            + float(gamma) * (1.0 - dots)
+        )
+        distances = np.where(mask, distances, np.inf)
+
+        k = min(int(top_k), int(mask.sum()))
+        idx = np.argpartition(distances, kth=k - 1)[:k]
+        idx = idx[np.argsort(distances[idx])]
+
         results: list[dict[str, Any]] = []
-        for d, item in scored[:top_k]:
+        for i in idx.tolist():
+            item = self._items[i]
             results.append(
                 {
-                    "distance": float(d),
+                    "distance": float(distances[i]),
                     "id": item.id,
                     "created_at": item.created_at,
                     "text": item.text,

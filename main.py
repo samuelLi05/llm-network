@@ -10,6 +10,10 @@ from agents.network_agent import NetworkAgent
 from agents.llm_service import LLMService
 from agents.local_llm import HuggingFaceLLM
 from agents.prompt_configs.generate_prompt import PromptGenerator
+from controller.stance_analysis.embedding_analyzer import EmbeddingAnalyzer
+from controller.stance_analysis.rolling_embedding_store import RollingEmbeddingStore
+from controller.stance_analysis.agent_profile_store import AgentProfileStore
+from controller.stance_analysis.network_topology import NetworkTopologyTracker
 from controller.time_manager import TimeManager
 from controller.order_manager import OrderManager
 from controller.stance_worker import StanceWorker
@@ -27,6 +31,12 @@ USE_LOCAL_LLM = True
 ENABLE_STANCE_WORKER = False
 STANCE_BATCH_SIZE = int(os.getenv("STANCE_BATCH_SIZE", "5"))
 STANCE_BATCH_INTERVAL = float(os.getenv("STANCE_BATCH_INTERVAL", "30"))
+
+ENABLE_EMBEDDING_CONTEXT = bool(os.getenv("ENABLE_EMBEDDING_CONTEXT", "1") == "1")
+ROLLING_STORE_MAX_ITEMS = int(os.getenv("ROLLING_STORE_MAX_ITEMS", "2000"))
+CONTEXT_TOP_K = int(os.getenv("CONTEXT_TOP_K", "8"))
+PROFILE_WINDOW_SIZE = int(os.getenv("PROFILE_WINDOW_SIZE", "200"))
+PROFILE_SEED_WEIGHT = float(os.getenv("PROFILE_SEED_WEIGHT", "5.0"))
 
 initial_prompt_template = (
    "You are participating in a social-media-style discussion about {topic}." \
@@ -72,6 +82,68 @@ async def main():
 
     # Initialize RedisCache for storing agent message histories
     message_cache = RedisCache(host=REDIS_HOST, port=REDIS_PORT)
+
+    # Embedding-based stores (optional)
+    embed_cache = RedisCache(host=REDIS_HOST, port=REDIS_PORT, prefix="embed:")
+    topology_cache = RedisCache(host=REDIS_HOST, port=REDIS_PORT, prefix="topology:")
+
+    rolling_store = None
+    profile_store = None
+    topology_tracker = None
+    analysis_lock = asyncio.Lock()
+
+    if ENABLE_EMBEDDING_CONTEXT and bool(os.getenv("OPENAI_API_KEY")):
+        analyzer = EmbeddingAnalyzer(topic)
+        rolling_store = RollingEmbeddingStore(
+            topic=topic,
+            analyzer=analyzer,
+            redis_cache=embed_cache,
+            max_items=ROLLING_STORE_MAX_ITEMS,
+        )
+        # Load previous corpus (if any)
+        loaded = await rolling_store.load_from_redis(last_n=min(500, ROLLING_STORE_MAX_ITEMS))
+        console_logger.info(f"Loaded {loaded} embedded posts from Redis.")
+
+        # Cold-start: seed the latent space with strong opposing posts
+        if loaded == 0:
+            seed_texts: list[tuple[str, str]] = []  # (side, text)
+            # Use the analyzer's anchor groups as stable reference seeds
+            for side, texts in analyzer.anchor_groups.items():
+                for t in texts:
+                    seed_texts.append((side, t))
+
+            # Add a few extra high-contrast, attention-grabbing seeds
+            seed_texts.extend(
+                [
+                    ("pro", f"Enough dithering. {topic} is non-negotiable — we should expand it now."),
+                    ("pro", f"If you're against {topic}, you're choosing stagnation. Push it through."),
+                    ("anti", f"Wake up: {topic} is a harmful mistake. Stop pretending it's 'progress'."),
+                    ("anti", f"{topic} is a disaster in slow motion. Reject it before it spreads."),
+                ]
+            )
+
+            for i, (side, text) in enumerate(seed_texts):
+                await rolling_store.add(
+                    text,
+                    id=f"seed:{i}",
+                    metadata={"sender_id": "__seed__", "seed": True, "side": side},
+                    persist=True,
+                )
+            console_logger.info(f"Seeded rolling store with {len(seed_texts)} synthetic posts.")
+
+        profile_store = AgentProfileStore(
+            redis=message_cache.redis,
+            window_size=PROFILE_WINDOW_SIZE,
+            seed_weight=PROFILE_SEED_WEIGHT,
+        )
+        topology_tracker = NetworkTopologyTracker(
+            topic=topic,
+            profile_store=profile_store,
+            redis_cache=topology_cache,
+            redis_key=f"snapshot:{topic}",
+        )
+    else:
+        console_logger.info("Embedding-based context disabled (missing OPENAI_API_KEY or ENABLE_EMBEDDING_CONTEXT=0).")
     # Redis stream helper (used for cleanup)
     redis_stream = RedisStream(host=REDIS_HOST, port=REDIS_PORT)
 
@@ -91,6 +163,7 @@ async def main():
         agent = NetworkAgent(
             id=agent_id,
             init_prompt=init_prompt,
+            topic=topic,
             stream_name=STREAM_NAME,
             stream_group=f"group_{i+1}",
             redis_host=REDIS_HOST,
@@ -100,6 +173,11 @@ async def main():
             message_cache=message_cache,
             logger=logger,
             llm_service=llm_service,
+            rolling_store=rolling_store,
+            profile_store=profile_store,
+            topology_tracker=topology_tracker,
+            analysis_lock=analysis_lock,
+            context_top_k=CONTEXT_TOP_K,
         )
         agents.append(agent)
 
@@ -176,6 +254,10 @@ async def main():
 
     await message_cache.clear_all()
     await message_cache.close()
+
+    if rolling_store is not None:
+        await embed_cache.close()
+    await topology_cache.close()
 
     if llm_service:
         await llm_service.stop()

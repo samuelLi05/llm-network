@@ -55,3 +55,23 @@ def sub_scaled(acc: list[float], vec: list[float], scale: float) -> list[float]:
     a = to_np(acc)
     v = to_np(vec)
     return (a - v * float(scale)).astype(np.float32, copy=False).tolist()
+
+
+def add_scaled_np(acc: list[float] | np.ndarray, vec: list[float] | np.ndarray, scale: float) -> np.ndarray:
+    a = to_np(acc)
+    v = to_np(vec)
+    return (a + v * float(scale)).astype(np.float32, copy=False)
+
+
+def sub_scaled_np(acc: list[float] | np.ndarray, vec: list[float] | np.ndarray, scale: float) -> np.ndarray:
+    a = to_np(acc)
+    v = to_np(vec)
+    return (a - v * float(scale)).astype(np.float32, copy=False)
+
+
+def l2_normalize_np(vec: list[float] | np.ndarray, *, eps: float = 1e-12) -> np.ndarray:
+    v = to_np(vec)
+    n = float(np.linalg.norm(v))
+    if n < eps:
+        return v.astype(np.float32, copy=False)
+    return (v / n).astype(np.float32, copy=False)

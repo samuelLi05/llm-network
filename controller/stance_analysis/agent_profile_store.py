@@ -6,7 +6,7 @@ from typing import Any, Optional
 from redis.asyncio import Redis as AsyncRedis
 
 from controller.stance_analysis.embedding_analyzer import EmbeddingAnalyzer
-from controller.stance_analysis.vector_ops import add_scaled, l2_normalize, sub_scaled, to_np
+from controller.stance_analysis.vector_ops import add_scaled_np, l2_normalize_np, sub_scaled_np, to_np
 
 import numpy as np
 
@@ -142,7 +142,71 @@ class AgentProfileStore:
             seed_vector=seed_vec_np,
         )
         # Ensure the stored vector is normalized
-        profile.vector = to_np(l2_normalize(profile.vector), dtype=np.float32)
+        profile.vector = l2_normalize_np(profile.vector)
+        await self.save(profile)
+        return profile
+
+    async def add_interaction_vector(
+        self,
+        agent_id: str,
+        *,
+        vector: list[float] | np.ndarray,
+        interaction_type: str,
+        ts: Optional[float] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> AgentProfile:
+        """Add an already-embedded interaction vector to the agent profile window.
+
+        This is the fast-path for stream integration: embed once on publish, then
+        update authored/consumed profiles without re-embedding.
+        """
+        ts = float(ts if ts is not None else time.time())
+        metadata = metadata or {}
+
+        profile = await self.load(agent_id)
+        if profile is None:
+            raise RuntimeError("Profile missing; call ensure_initialized() first")
+
+        if interaction_type not in {"authored", "consumed"}:
+            raise ValueError("interaction_type must be 'authored' or 'consumed'")
+
+        weight = profile.authored_weight if interaction_type == "authored" else profile.consumed_weight
+        vec_np = to_np(vector, dtype=np.float32)
+
+        # Initialize sum_vector if needed
+        if profile.sum_vector is None or (isinstance(profile.sum_vector, list) and len(profile.sum_vector) == 0):
+            profile.sum_vector = to_np(self._zeros(len(vec_np)), dtype=np.float32)
+
+        # Append to window
+        profile.window.append(
+            {
+                "vector": vec_np,
+                "weight": float(weight),
+                "type": interaction_type,
+                "ts": ts,
+                "meta": metadata,
+            }
+        )
+        profile.sum_vector = add_scaled_np(profile.sum_vector, vec_np, float(weight))
+        profile.total_weight += float(weight)
+
+        # Enforce sliding window
+        while len(profile.window) > profile.window_size:
+            old = profile.window.pop(0)
+            old_vec = old.get("vector")
+            old_w = float(old.get("weight", 1.0))
+            if old_vec is not None:
+                profile.sum_vector = sub_scaled_np(profile.sum_vector, old_vec, old_w)
+                profile.total_weight -= old_w
+
+        # Compute final agent vector = normalize(seed_weight*seed_vec + sum_vector)
+        combined = to_np(profile.sum_vector, dtype=np.float32)
+        if profile.seed_vector is not None and profile.seed_weight > 0:
+            combined = add_scaled_np(combined, profile.seed_vector, float(profile.seed_weight))
+
+        profile.vector = l2_normalize_np(combined)
+        profile.updated_at = time.time()
+
         await self.save(profile)
         return profile
 
@@ -174,47 +238,13 @@ class AgentProfileStore:
         if embedded is None or "vector" not in embedded:
             raise RuntimeError("Failed to embed interaction")
 
-        vec = embedded["vector"]
-        vec_np = to_np(vec, dtype=np.float32)
-        if profile.seed_vector is None:
-            # Safety: allow profiles created externally.
-            profile.seed_vector = vec_np
-
-        # Initialize sum_vector if needed
-        if profile.sum_vector is None or (isinstance(profile.sum_vector, list) and len(profile.sum_vector) == 0):
-            profile.sum_vector = to_np(self._zeros(len(vec_np)), dtype=np.float32)
-
-        # Append to window
-        profile.window.append(
-            {
-                "vector": vec_np,
-                "weight": float(weight),
-                "type": interaction_type,
-                "ts": ts,
-                "meta": metadata,
-            }
+        return await self.add_interaction_vector(
+            agent_id,
+            vector=embedded["vector"],
+            interaction_type=interaction_type,
+            ts=ts,
+            metadata=metadata,
         )
-        profile.sum_vector = to_np(add_scaled(profile.sum_vector, vec_np, float(weight)), dtype=np.float32)
-        profile.total_weight += float(weight)
-
-        # Enforce sliding window
-        while len(profile.window) > profile.window_size:
-            old = profile.window.pop(0)
-            old_vec = old.get("vector")
-            old_w = float(old.get("weight", 1.0))
-            if old_vec is not None:
-                profile.sum_vector = to_np(sub_scaled(profile.sum_vector, old_vec, old_w), dtype=np.float32)
-                profile.total_weight -= old_w
-
-        # Compute final agent vector = normalize(seed_weight*seed_vec + sum_vector)
-        combined = list(profile.sum_vector)
-        if profile.seed_vector is not None and profile.seed_weight > 0:
-            combined = add_scaled(combined, profile.seed_vector, float(profile.seed_weight))
-        profile.vector = to_np(l2_normalize(combined), dtype=np.float32)
-        profile.updated_at = time.time()
-
-        await self.save(profile)
-        return profile
 
     async def get_agent_topic_view(self, agent_id: str, *, topic: str) -> Optional[dict[str, Any]]:
         """Project the agent vector into a topic anchor frame (fast; no embedding call)."""
