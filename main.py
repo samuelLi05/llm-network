@@ -39,7 +39,7 @@ CONTEXT_TOP_K = 8
 PROFILE_WINDOW_SIZE = 50
 PROFILE_SEED_WEIGHT = 5.0
 
-TOPOLOGY_LOG_INTERVAL_S = float(os.getenv("TOPOLOGY_LOG_INTERVAL_S", "10"))
+TOPOLOGY_LOG_INTERVAL_S = float(os.getenv("TOPOLOGY_LOG_INTERVAL_S", "5"))
 
 initial_prompt_template = (
    "You are participating in a social-media-style discussion about {topic}." \
@@ -191,6 +191,7 @@ async def main():
     order_manager = OrderManager(
         agents=agents,
         message_cache=message_cache,
+        profile_store=profile_store,
         redis_host=REDIS_HOST,
         redis_port=REDIS_PORT,
     )

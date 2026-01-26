@@ -1,7 +1,10 @@
 import random
+import os
+import time
 from typing import List, Optional
 
 from agents.network_agent import NetworkAgent
+from controller.stance_analysis.agent_profile_store import AgentProfileStore
 from network.cache import RedisCache
 from network.stream import RedisStream
 
@@ -15,19 +18,66 @@ so all agents see a consistent value.
 # Redis key for storing the designated next responder
 NEXT_RESPONDER_KEY = "llm_network:next_responder"
 
+# Optional bookkeeping for fairness / debiasing
+ORDER_LAST_SELECTED_PREFIX = "llm_network:order:last_selected:"
+ORDER_COUNT_PREFIX = "llm_network:order:count:"
+ORDER_LAST_META_KEY = "llm_network:order:last_meta"
+
 
 class OrderManager:
     def __init__(
         self,
         agents: List[NetworkAgent],
         message_cache: RedisCache,
+        profile_store: Optional[AgentProfileStore] = None,
         redis_host: str = 'localhost',
         redis_port: int = 6379,
     ):
         self.agents = agents
         self.message_cache = message_cache
+        self.profile_store = profile_store
         # RedisStream uses a synchronous redis client with decode_responses=True
         self.stream_client = RedisStream(host=redis_host, port=redis_port)
+
+        # Ordering policy knobs (env-configurable)
+        self.ordering_mode = os.getenv("ORDERING_MODE", "random").lower()  # random|topology
+        self.echo_probability = float(os.getenv("ORDER_ECHO_PROB", "0.6"))
+        self.fairness_tau_s = float(os.getenv("ORDER_FAIRNESS_TAU_S", "30"))
+        self.cooldown_s = float(os.getenv("ORDER_COOLDOWN_S", "0"))
+        self.temperature = float(os.getenv("ORDER_TEMPERATURE", "0.8"))
+        self.sim_weight = float(os.getenv("ORDER_SIM_WEIGHT", "1.0"))
+        self.fair_weight = float(os.getenv("ORDER_FAIR_WEIGHT", "0.6"))
+        self.extremeness_penalty = float(os.getenv("ORDER_EXTREMENESS_PENALTY", "0.35"))
+        self.explore_epsilon = float(os.getenv("ORDER_EXPLORE_EPS", "0.08"))
+
+    def _key_last_selected(self, agent_id: str) -> str:
+        return f"{ORDER_LAST_SELECTED_PREFIX}{agent_id}"
+
+    def _key_count(self, agent_id: str) -> str:
+        return f"{ORDER_COUNT_PREFIX}{agent_id}"
+
+    def _get_last_selected_ts(self, agent_id: str) -> Optional[float]:
+        try:
+            raw = self.stream_client.redis.get(self._key_last_selected(agent_id))
+            if raw is None:
+                return None
+            return float(raw)
+        except Exception:
+            return None
+
+    def _record_selected(self, agent_id: str, *, meta: Optional[dict] = None) -> None:
+        try:
+            now = time.time()
+            self.stream_client.redis.set(self._key_last_selected(agent_id), str(now))
+            try:
+                self.stream_client.redis.incr(self._key_count(agent_id))
+            except Exception:
+                pass
+            if meta is not None:
+                # keep small; debugging only
+                self.stream_client.redis.set(ORDER_LAST_META_KEY, str(meta))
+        except Exception:
+            pass
 
     def get_random_agent(self, exclude_agent_id: Optional[str] = None) -> str:
         """Return a random agent id, optionally excluding one agent.
@@ -51,6 +101,177 @@ class OrderManager:
 
         chosen = random.choice(candidates)
         return chosen.id
+    
+    def get_sim_or_different_agent(self, agent_id: str, similar: bool = True) -> Optional[str]:
+        """Return an agent id that is either most similar or most different to the given agent. """
+        pass
+
+    async def _select_topology_weighted(
+        self,
+        *,
+        reference_agent_id: Optional[str],
+        exclude_agent_id: Optional[str],
+    ) -> str:
+        """Select next responder using agent profile vectors with guardrails.
+
+        Goals:
+          - Mix echo-chamber and cross-cutting replies (echo_probability)
+          - Avoid the same agent dominating (recency-based fairness + optional cooldown)
+          - Reduce 'only extremes post' trap (penalize distance from population centroid)
+          - Keep some exploration (epsilon random)
+        """
+
+        # Hard fallback if we can't do topology
+        if self.profile_store is None or not self.agents:
+            return self.get_random_agent(exclude_agent_id=exclude_agent_id)
+
+        candidates = [a for a in self.agents if a.id != exclude_agent_id]
+        if not candidates:
+            candidates = list(self.agents)
+
+        # Apply a cooldown to reduce ping-pong / dominance
+        if self.cooldown_s > 0:
+            now = time.time()
+            cooled = []
+            for a in candidates:
+                last_ts = self._get_last_selected_ts(a.id)
+                if last_ts is None or (now - last_ts) >= self.cooldown_s:
+                    cooled.append(a)
+            if cooled:
+                candidates = cooled
+
+        # Epsilon exploration: random (but still exclude current)
+        if self.explore_epsilon > 0 and random.random() < self.explore_epsilon:
+            return random.choice(candidates).id
+
+        # Load vectors
+        ref_vec = None
+        if reference_agent_id:
+            ref_profile = await self.profile_store.load(reference_agent_id)
+            if ref_profile is not None and ref_profile.vector is not None:
+                ref_vec = ref_profile.vector
+
+        cand_profiles = []  # (agent_id, vector or None)
+        for a in candidates:
+            p = await self.profile_store.load(a.id)
+            cand_profiles.append((a.id, None if p is None else p.vector))
+
+        # If reference vector missing, fall back to fairness-only weighted random
+        if ref_vec is None:
+            picked = self._pick_by_fairness([aid for aid, _ in cand_profiles])
+            return picked
+
+        # Compute centroid of available vectors for extremeness penalty
+        vecs = [v for _, v in cand_profiles if v is not None]
+        centroid = None
+        if vecs:
+            # average then renormalize (best-effort)
+            dim = len(vecs[0])
+            mean = [0.0] * dim
+            for v in vecs:
+                for i in range(dim):
+                    mean[i] += float(v[i])
+            inv = 1.0 / float(len(vecs))
+            for i in range(dim):
+                mean[i] *= inv
+            # normalize
+            norm = sum(x * x for x in mean) ** 0.5
+            if norm > 0:
+                centroid = [x / norm for x in mean]
+
+        wants_echo = random.random() < max(0.0, min(1.0, self.echo_probability))
+        now = time.time()
+
+        scored = []  # (agent_id, score, sim, fairness, extremeness)
+        for agent_id, v in cand_profiles:
+            # Similarity to reference
+            sim = 0.0
+            if v is not None:
+                sim = sum(float(a) * float(b) for a, b in zip(ref_vec, v))
+
+            sim_component = sim if wants_echo else (-sim)
+
+            # Fairness (prefer agents that haven't spoken recently)
+            last_ts = self._get_last_selected_ts(agent_id)
+            if last_ts is None or self.fairness_tau_s <= 0:
+                fairness = 1.0
+            else:
+                fairness = max(0.0, min(1.0, (now - last_ts) / self.fairness_tau_s))
+
+            # Extremeness: distance from centroid (penalize large distances)
+            extremeness = 0.0
+            if centroid is not None and v is not None:
+                cent_sim = sum(float(a) * float(b) for a, b in zip(centroid, v))
+                extremeness = 1.0 - float(cent_sim)
+
+            score = (
+                (self.sim_weight * sim_component)
+                + (self.fair_weight * fairness)
+                - (self.extremeness_penalty * extremeness)
+                + (random.random() * 1e-3)  # tiny tie-break
+            )
+            scored.append((agent_id, score, sim, fairness, extremeness))
+
+        # Softmax sample
+        agent_ids = [s[0] for s in scored]
+        scores = [s[1] for s in scored]
+        picked = self._softmax_pick(agent_ids, scores, temperature=self.temperature)
+
+        # Persist bookkeeping/debug meta
+        try:
+            top = sorted(scored, key=lambda x: x[1], reverse=True)[:5]
+            meta = {
+                "mode": "echo" if wants_echo else "contrast",
+                "reference": reference_agent_id,
+                "exclude": exclude_agent_id,
+                "picked": picked,
+                "top": [
+                    {
+                        "agent_id": a,
+                        "score": float(sc),
+                        "sim": float(si),
+                        "fair": float(fa),
+                        "extreme": float(ex),
+                    }
+                    for a, sc, si, fa, ex in top
+                ],
+            }
+            self._record_selected(picked, meta=meta)
+        except Exception:
+            self._record_selected(picked, meta=None)
+
+        return picked
+
+    def _pick_by_fairness(self, agent_ids: list[str]) -> str:
+        if not agent_ids:
+            raise ValueError("No agents available")
+        now = time.time()
+        weights = []
+        for aid in agent_ids:
+            last_ts = self._get_last_selected_ts(aid)
+            if last_ts is None or self.fairness_tau_s <= 0:
+                w = 1.0
+            else:
+                w = max(0.05, min(1.0, (now - last_ts) / self.fairness_tau_s))
+            weights.append(w)
+        return random.choices(agent_ids, weights=weights, k=1)[0]
+
+    @staticmethod
+    def _softmax_pick(agent_ids: list[str], scores: list[float], *, temperature: float) -> str:
+        if not agent_ids:
+            raise ValueError("No agents available")
+        if len(agent_ids) == 1:
+            return agent_ids[0]
+
+        t = temperature if temperature and temperature > 0 else 1.0
+        scaled = [s / t for s in scores]
+        m = max(scaled)
+        exps = [pow(2.718281828, (s - m)) for s in scaled]
+        total = sum(exps)
+        if total <= 0:
+            return random.choice(agent_ids)
+        probs = [e / total for e in exps]
+        return random.choices(agent_ids, weights=probs, k=1)[0]
 
     def get_last_publisher(self, stream_name: str) -> Optional[str]:
         """Return the sender_id of the most recent message in the stream, or None."""
@@ -66,13 +287,20 @@ class OrderManager:
             pass
         return None
 
-    def select_and_store_next_responder(self, exclude_agent_id: Optional[str] = None) -> str:
-        """Select a random next responder, store it in Redis, and return the agent id.
-        
-        This should be called ONCE after a message is published to designate
-        who responds next. All agents will then read this same value.
+    async def select_and_store_next_responder(self, exclude_agent_id: Optional[str] = None) -> str:
+        """Select the next responder, store it in Redis, and return the agent id.
+
+        Called by the publishing agent *before* publishing so other agents
+        can see who is designated to respond next.
         """
-        next_agent_id = self.get_random_agent(exclude_agent_id=exclude_agent_id)
+        if self.ordering_mode == "topology" and self.profile_store is not None:
+            next_agent_id = await self._select_topology_weighted(
+                reference_agent_id=exclude_agent_id,
+                exclude_agent_id=exclude_agent_id,
+            )
+        else:
+            next_agent_id = self.get_random_agent(exclude_agent_id=exclude_agent_id)
+
         # Store in Redis so all agents see the same value
         self.stream_client.redis.set(NEXT_RESPONDER_KEY, next_agent_id)
         return next_agent_id

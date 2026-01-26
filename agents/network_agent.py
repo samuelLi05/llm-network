@@ -262,7 +262,7 @@ class NetworkAgent:
 
             # Designate the next responder BEFORE publishing the message
             if self.order_manager:
-                next_responder = self.order_manager.select_and_store_next_responder(exclude_agent_id=self.id)
+                next_responder = await self.order_manager.select_and_store_next_responder(exclude_agent_id=self.id)
                 console_logger.info(f"Agent {self.id} designating next responder: {next_responder}")
 
             # Now publish the message (other agents will see the designated responder)
