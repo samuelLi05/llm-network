@@ -4,7 +4,7 @@ from typing import Optional, List, Dict, Any
 
 from network.stream import RedisStream
 from network.cache import RedisCache
-from controller.stance_analysis.baseline_analyzer import StanceAnalyzer
+from controller.stance_analysis.baseline_analyzer import BaselineAnalyzer
 from agents.local_llm import HuggingFaceLLM as LocalLLM
 from agents.llm_service import LLMService
 
@@ -41,7 +41,7 @@ class StanceWorker:
         self.stream = RedisStream(host=redis_host, port=redis_port)
         self.stance_cache = RedisCache(host=redis_host, port=redis_port, prefix="stance:")
 
-        self.analyzer = StanceAnalyzer(topic, local_llm=local_llm, llm_service=llm_service)
+        self.analyzer = BaselineAnalyzer(topic, local_llm=local_llm, llm_service=llm_service)
         self.use_openai = use_openai
         self.use_local = bool(local_llm or llm_service)
 

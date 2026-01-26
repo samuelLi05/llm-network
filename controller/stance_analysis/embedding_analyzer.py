@@ -3,12 +3,14 @@ import asyncio
 import math
 from typing import Optional
 from openai import OpenAI
+from dotenv import load_dotenv
 from agents.local_llm import HuggingFaceLLM as LocalLLM
 from agents.llm_service import LLMService
 
 from controller.stance_analysis.vector_ops import dot_similarity_normalized, l2_normalize, mean_vector
 
 # Load in API key
+load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 

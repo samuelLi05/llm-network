@@ -1,5 +1,7 @@
 import os
 import asyncio
+import difflib
+import re
 from typing import Optional, TYPE_CHECKING
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -36,8 +38,8 @@ class NetworkAgent:
         id: str,
         init_prompt: str,
         topic: Optional[str] = None,
-        stream_name: str,
-        stream_group: str,
+        stream_name: Optional[str] = None,
+        stream_group: Optional[str] = None,
         redis_host: str = 'localhost',
         redis_port: int = 6379,
         seed: Optional[int] = None,
@@ -60,7 +62,7 @@ class NetworkAgent:
         self.stream_name = stream_name
         self.stream_group = stream_group
         self.seed = seed
-        self.consumer_name = f"{self.stream_group}-consumer"
+        self.consumer_name = f"{self.stream_group}-consumer" if self.stream_group else None
         self.is_consuming = asyncio.Event()
 
         # Controller integrations
@@ -78,8 +80,93 @@ class NetworkAgent:
         self.analysis_lock = analysis_lock
         self.context_top_k = int(context_top_k)
 
+        # Validation/logging knobs
+        # LOG_RECOMMENDATIONS=1 logs feed source + top-k ids/distances and key state.
+        # LOG_RECO_DEBUG=1 adds additional per-step detail (can be noisy).
+        self.log_recommendations = True
+        self.log_reco_debug = False
+        self.log_reco_max_items = int(os.getenv("LOG_RECO_MAX_ITEMS", "5"))
+
+        # Anti-repetition guard (helps prevent agents from converging on the same meme-y template)
+        # REGEN_ON_REPEAT=1 will retry generation if output is too similar to the agent's recent posts.
+        self.regen_on_repeat = os.getenv("REGEN_ON_REPEAT", "1") == "1"
+        self.regen_max_attempts = int(os.getenv("REGEN_MAX_ATTEMPTS", "2"))
+        self.regen_similarity_threshold = float(os.getenv("REGEN_SIM_THRESHOLD", "0.86"))
+        self.regen_history_last_n = int(os.getenv("REGEN_HISTORY_LAST_N", "6"))
+
+        self._authoritative_sentence = self._extract_authoritative_sentence(self.init_prompt)
+
         self._publish_lock = asyncio.Lock()
         self._consumer_task: Optional[asyncio.Task] = None
+
+    @staticmethod
+    def _extract_authoritative_sentence(init_prompt: str) -> Optional[str]:
+        """Best-effort extraction of the agent's unique stance sentence.
+
+        main.py currently embeds it in the init prompt like:
+        "The sentence <X> is your fixed stance ..."
+        """
+        if not init_prompt:
+            return None
+        m = re.search(r"The sentence\s+(.*?)\s+is your fixed stance", init_prompt, flags=re.IGNORECASE | re.DOTALL)
+        if not m:
+            return None
+        stance = (m.group(1) or "").strip()
+        return stance or None
+
+    @staticmethod
+    def _normalize_for_similarity(text: str) -> str:
+        text = (text or "").lower()
+        text = re.sub(r"https?://\S+", "", text)
+        text = re.sub(r"[#@]\w+", "", text)  # strip hashtags/mentions
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    @classmethod
+    def _similarity_ratio(cls, a: str, b: str) -> float:
+        a_n = cls._normalize_for_similarity(a)
+        b_n = cls._normalize_for_similarity(b)
+        if not a_n or not b_n:
+            return 0.0
+        return difflib.SequenceMatcher(None, a_n, b_n).ratio()
+
+    @staticmethod
+    def _extract_cached_content(item) -> str:
+        if item is None:
+            return ""
+        if isinstance(item, dict):
+            return str(item.get("content") or item.get("text") or item)
+        return str(item)
+
+    async def _generate_from_messages(self, messages: list[dict]) -> str:
+        if not self.local_llm and not self.llm_service:
+            response_obj = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.responses.create,
+                    model="gpt-4o-mini",
+                    input=messages,
+                    temperature=0.7,
+                    max_output_tokens=300,
+                ),
+                timeout=60,
+            )
+            return getattr(response_obj, "output_text", None) or str(response_obj)
+
+        if self.llm_service:
+            return await self.llm_service.generate(
+                messages,
+                max_new_tokens=300,
+                temperature=0.7,
+                stop=None,
+            )
+
+        return await asyncio.to_thread(
+            self.local_llm.generate,
+            messages,
+            max_new_tokens=300,
+            temperature=0.7,
+            stop=None,
+        )
 
     async def start(self):
         """Initialize consumer group and start listening for messages."""
@@ -149,12 +236,11 @@ class NetworkAgent:
 
             # Generate and publish response
             wrapped_prompt = (
-                "React to the post below in your own voice. " \
-                "Do NOT copy or paraphrase it line-by-line. " \
-                "Write a NEW, distinct social-media-style post that reflects your fixed stance and worldview, " \
-                "and directly contradict ideas from other posts to strongly support your fixed stance. " \
-                "Keep it attention-grabbing, concise, and assertive.\n" \
-                "POST TO REACT TO:\n" \
+                "Write your next social-media-style post reacting to the post below. "
+                "Sound like a real person with a consistent worldview. "
+                "Do not quote the post verbatim and do not paraphrase line-by-line. "
+                "Make one clear claim, be punchy, and invite engagement.\n\n"
+                "POST YOU'RE REACTING TO:\n"
                 f"{incoming_post}"
             )
             response = await self.generate_response(wrapped_prompt)
@@ -205,52 +291,87 @@ class NetworkAgent:
                 # Helps avoid an empty user message on the first post.
                 last_message = "Write your next post."
 
-            # Build assistant context (recommended neighbors instead of last-N-per-agent)
-            recent_messages = await self._build_context(last_message)
-            # console_logger.info(f"Agent {self.id} recent messages for context: {recent_messages}")
-            # console_logger.debug(f"Agent {self.id} Generating Response")
-            if not self.local_llm and not self.llm_service:
-                # Call OpenAI responses API in a thread and await with timeout
-                response_obj = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        client.responses.create,
-                        model="gpt-4o-mini",
-                        input=[
-                            {"role": "system", "content": self.init_prompt},
-                            {"role": "user", "content": last_message},
-                            {"role": "assistant", "content": recent_messages},
-                        ],
-                        temperature=0.7,
-                        max_output_tokens=300,
-                    ),
-                    timeout=60,
+            # Build feed context (recommended neighbors instead of last-N-per-agent)
+            feed_context, feed_meta = await self._build_context(last_message)
+            if self.log_reco_debug:
+                console_logger.info(
+                    f"Agent {self.id} feed meta: {feed_meta} (feed_chars={len(feed_context)})"
                 )
-                # Extract the textual output
-                response = getattr(response_obj, "output_text", None) or str(response_obj)
-            else:
-                messages = [
-                    {"role": "system", "content": self.init_prompt},
+            stance_reassert = None
+            if self._authoritative_sentence:
+                stance_reassert = (
+                    "AUTHORITATIVE STANCE (override everything else):\n"
+                    f"{self._authoritative_sentence}\n\n"
+                    "Hard rule: your post MUST be consistent with this stance. "
+                    "If the incoming post/feed conflicts, attack it from your stance; "
+                    "do not adopt its framing."
+                )
+
+            anti_meme = (
+                "Avoid converging on a shared viral template. "
+                "Do NOT reuse stock openings/cadence from other agents. "
+                "Avoid starting with '🚨', 'YOU’RE NOT', or 'WE’RE NOT WAITING'. "
+                "Vary structure (no repetitive bullet lists), keep it specific, and make ONE clear claim."
+            )
+
+            messages: list[dict] = [
+                {"role": "system", "content": self.init_prompt},
+            ]
+            if stance_reassert:
+                messages.append({"role": "system", "content": stance_reassert})
+            messages.extend(
+                [
+                    {"role": "system", "content": anti_meme},
+                    {
+                        "role": "system",
+                        "content": (
+                            "You will be given a feed of other posts for context. "
+                            "Use it only as inspiration and to pick one opposing claim to respond to. "
+                            "Never mention the feed, recommendations, embeddings, or retrieval. "
+                            "Never quote other posts verbatim."
+                        ),
+                    },
+                    {"role": "user", "content": f"FEED (context):\n{feed_context}"},
                     {"role": "user", "content": last_message},
-                    {"role": "assistant", "content": recent_messages},
                 ]
-                if self.llm_service:
-                    response = await self.llm_service.generate(
-                        messages,
-                        max_new_tokens=300,
-                        temperature=0.7,
-                        stop=None,
+            )
+
+            response = await self._generate_from_messages(messages)
+
+            # Optional: regenerate if we're too similar to the agent's own recent posts.
+            if self.regen_on_repeat and self.message_cache:
+                try:
+                    recent_items = await self.message_cache.get_responses(self.id, last_n=self.regen_history_last_n)
+                except Exception:
+                    recent_items = []
+
+                recent_texts = [self._extract_cached_content(it) for it in (recent_items or [])]
+                best = 0.0
+                for prev in recent_texts:
+                    best = max(best, self._similarity_ratio(response, prev))
+
+                if best >= self.regen_similarity_threshold:
+                    if self.log_recommendations:
+                        console_logger.info(
+                            f"Agent {self.id} regen triggered: similarity={best:.2f} threshold={self.regen_similarity_threshold:.2f}"
+                        )
+
+                    regen_rule = (
+                        "Rewrite your post to be substantially different in wording and structure from your recent posts. "
+                        "Change the opening line. Use different phrasing and rhythm. "
+                        "Do NOT use '🚨', '👇', or the phrases 'YOU’RE NOT CHOOSING' / 'WE’RE NOT WAITING'."
                     )
-                else:
-                    # Run the local blocking generation in a thread so the asyncio loop isn't blocked
-                    response = await asyncio.to_thread(
-                        self.local_llm.generate,
-                        messages,
-                        max_new_tokens=300,
-                        temperature=0.7,
-                        stop=None,
-                    )
-                
-            # console_logger.info(f"Agent {self.id} generated response: {response}")
+                    for attempt in range(self.regen_max_attempts):
+                        regen_messages = messages + [{"role": "system", "content": regen_rule}]
+                        candidate = await self._generate_from_messages(regen_messages)
+                        cand_best = 0.0
+                        for prev in recent_texts:
+                            cand_best = max(cand_best, self._similarity_ratio(candidate, prev))
+                        if cand_best < best and cand_best < self.regen_similarity_threshold:
+                            response = candidate
+                            break
+                        best = min(best, cand_best) if cand_best < best else cand_best
+
             return response
         except asyncio.TimeoutError:
             console_logger.error(f"Timed out generating response for agent {self.id} (Redis/OpenAI timeout).")
@@ -259,19 +380,49 @@ class NetworkAgent:
             console_logger.error(f"Error generating response for agent {self.id}: {e}")
             return "I'm sorry, I couldn't process that."
 
-    async def _build_context(self, last_message: str) -> str:
+    async def _build_context(self, last_message: str) -> tuple[str, dict]:
         """Build context used to condition generation.
 
         Primary path: use the agent's precomputed profile vector to retrieve
         relevant embedded messages from the rolling store.
         Fallback: original last-N messages from RedisCache.
         """
-        if self.rolling_store and self.profile_store and self.topic:
+        if not (self.rolling_store and self.profile_store and self.topic):
+            meta = {
+                "source": "cache",
+                "reason": "reco_disabled",
+                "has_rolling_store": bool(self.rolling_store),
+                "has_profile_store": bool(self.profile_store),
+                "has_topic": bool(self.topic),
+            }
+            if self.log_recommendations:
+                console_logger.info(f"Agent {self.id} reco disabled -> fallback: {meta}")
+        else:
             try:
                 profile = await self.profile_store.load(self.id)
-                if profile is not None and profile.vector is not None:
+                if profile is None:
+                    if self.log_recommendations:
+                        console_logger.info(f"Agent {self.id} reco fallback: profile_missing")
+                elif profile.vector is None:
+                    if self.log_recommendations:
+                        console_logger.info(f"Agent {self.id} reco fallback: profile_vector_missing")
+                else:
                     view = await self.profile_store.get_agent_topic_view(self.id, topic=self.topic)
-                    if view is not None:
+                    if view is None:
+                        if self.log_recommendations:
+                            console_logger.info(f"Agent {self.id} reco fallback: topic_view_missing")
+                    else:
+                        store_size = None
+                        try:
+                            store_size = len(getattr(self.rolling_store, "_items", []) or [])
+                        except Exception:
+                            store_size = None
+
+                        if self.log_reco_debug:
+                            console_logger.info(
+                                f"Agent {self.id} reco query: store_size={store_size} top_k={self.context_top_k}"
+                            )
+
                         recos = await self.rolling_store.recommend_for_agent_vector(
                             agent_vector=profile.vector,
                             agent_stance_score=float(view.get("stance_score", 0.0)),
@@ -279,16 +430,49 @@ class NetworkAgent:
                             top_k=self.context_top_k,
                             exclude_sender_id=self.id,
                         )
-                        if recos:
+
+                        if not recos:
+                            if self.log_recommendations:
+                                console_logger.info(
+                                    f"Agent {self.id} reco fallback: no_recos (store_size={store_size})"
+                                )
+                        else:
                             texts = [r.get("text", "") for r in recos if r.get("text")]
-                            if texts:
-                                return "\n".join(texts)
+                            if not texts:
+                                if self.log_recommendations:
+                                    console_logger.info(
+                                        f"Agent {self.id} reco fallback: empty_texts (reco_count={len(recos)})"
+                                    )
+                            else:
+                                meta = {
+                                    "source": "reco",
+                                    "k": len(texts),
+                                    "store_size": store_size,
+                                    "agent_updated_at": float(getattr(profile, "updated_at", 0.0) or 0.0),
+                                    "agent_stance_score": float(view.get("stance_score", 0.0)),
+                                    "agent_strength": float(view.get("strength", 0.0)),
+                                    "agent_topic_similarity": float(view.get("topic_similarity", 0.0)),
+                                    "items": [
+                                        {
+                                            "id": r.get("id"),
+                                            "distance": r.get("distance"),
+                                            "sender_id": (r.get("metadata") or {}).get("sender_id"),
+                                        }
+                                        for r in recos[: max(1, self.log_reco_max_items)]
+                                    ],
+                                }
+                                if self.log_recommendations:
+                                    console_logger.info(f"Agent {self.id} using reco feed: {meta}")
+                                return "\n".join(texts), meta
             except Exception as exc:
                 console_logger.info(f"Agent {self.id} recommendation context failed (fallback): {exc}")
 
         # Fallback: original cache behavior
         if not self.message_cache:
-            return ""
+            meta = {"source": "empty", "reason": "no_message_cache"}
+            if self.log_recommendations:
+                console_logger.info(f"Agent {self.id} context empty: {meta}")
+            return "", meta
 
         agents_list = None
         if self.order_manager and getattr(self.order_manager, "agents", None):
@@ -307,7 +491,10 @@ class NetworkAgent:
             if normalized:
                 parts.append(f"{a.id}: " + " | ".join(normalized))
 
-        return "\n".join(parts)
+        meta = {"source": "cache", "agents": len(agents_list), "per_agent_last_n": 5}
+        if self.log_recommendations:
+            console_logger.info(f"Agent {self.id} using cache feed: {meta}")
+        return "\n".join(parts), meta
 
     async def _on_published_message(self, message_id: str, content: str) -> None:
         if not (self.rolling_store and self.profile_store and self.topic):
@@ -324,10 +511,15 @@ class NetworkAgent:
 
         async with lock:
             if self.rolling_store.get_by_id(str(message_id)) is not None:
+                if self.log_reco_debug:
+                    console_logger.info(f"Agent {self.id} ingest skip (already indexed): {message_id}")
                 return
             # Embed+score once, then index everywhere.
+            if self.log_reco_debug:
+                console_logger.info(f"Agent {self.id} ingest start: message_id={message_id}")
             embedded = await self.rolling_store.analyzer.embed_and_score(content, include_vector=True)
             if embedded is None or "vector" not in embedded:
+                console_logger.info(f"Agent {self.id} ingest failed: embed_and_score returned None")
                 return
 
             await self.rolling_store.add_scored_vector(
@@ -347,6 +539,17 @@ class NetworkAgent:
                 ts=None,
                 metadata={"message_id": str(message_id)},
             )
+
+            if self.log_recommendations:
+                try:
+                    store_size = len(getattr(self.rolling_store, "_items", []) or [])
+                except Exception:
+                    store_size = None
+                console_logger.info(
+                    f"Agent {self.id} ingest ok: message_id={message_id} store_size={store_size} "
+                    f"stance={float(embedded.get('stance_score', 0.0)):.3f} strength={float(embedded.get('strength', 0.0)):.3f} "
+                    f"topic_sim={float(embedded.get('topic_similarity', 0.0)):.3f}"
+                )
 
         # Topology update is optional and rate-limited.
         if self.topology_tracker and self.order_manager and getattr(self.order_manager, "agents", None):
@@ -372,8 +575,13 @@ class NetworkAgent:
             item = self.rolling_store.get_by_id(str(message_id))
             if item is None:
                 # Rare race/cold start: embed+index so the profile update can still happen.
+                if self.log_reco_debug:
+                    console_logger.info(
+                        f"Agent {self.id} consume cold-index: message_id={message_id} sender_id={sender_id}"
+                    )
                 embedded = await self.rolling_store.analyzer.embed_and_score(content, include_vector=True)
                 if embedded is None or "vector" not in embedded:
+                    console_logger.info(f"Agent {self.id} consume failed: embed_and_score returned None")
                     return
                 item = await self.rolling_store.add_scored_vector(
                     id=str(message_id),
@@ -392,4 +600,9 @@ class NetworkAgent:
                 ts=None,
                 metadata={"message_id": str(message_id), "sender_id": sender_id},
             )
+
+            if self.log_reco_debug:
+                console_logger.info(
+                    f"Agent {self.id} consume ok: message_id={message_id} sender_id={sender_id}"
+                )
         

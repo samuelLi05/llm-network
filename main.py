@@ -20,23 +20,26 @@ from controller.stance_worker import StanceWorker
 from network.cache import RedisCache
 from network.stream import RedisStream
 from logs.logger import Logger, console_logger
+from logs.topology_logger import TopologyLogger
 
 # Configuration
 NUM_AGENTS = 10
 STREAM_NAME = "agent_stream"
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
-RUN_DURATION_SECONDS = 100
+RUN_DURATION_SECONDS = 500
 USE_LOCAL_LLM = True
 ENABLE_STANCE_WORKER = False
-STANCE_BATCH_SIZE = int(os.getenv("STANCE_BATCH_SIZE", "5"))
-STANCE_BATCH_INTERVAL = float(os.getenv("STANCE_BATCH_INTERVAL", "30"))
+STANCE_BATCH_SIZE = 5
+STANCE_BATCH_INTERVAL = 30
 
-ENABLE_EMBEDDING_CONTEXT = bool(os.getenv("ENABLE_EMBEDDING_CONTEXT", "1") == "1")
-ROLLING_STORE_MAX_ITEMS = int(os.getenv("ROLLING_STORE_MAX_ITEMS", "2000"))
-CONTEXT_TOP_K = int(os.getenv("CONTEXT_TOP_K", "8"))
-PROFILE_WINDOW_SIZE = int(os.getenv("PROFILE_WINDOW_SIZE", "200"))
-PROFILE_SEED_WEIGHT = float(os.getenv("PROFILE_SEED_WEIGHT", "5.0"))
+ENABLE_EMBEDDING_CONTEXT = True
+ROLLING_STORE_MAX_ITEMS = 2000
+CONTEXT_TOP_K = 8
+PROFILE_WINDOW_SIZE = 50
+PROFILE_SEED_WEIGHT = 5.0
+
+TOPOLOGY_LOG_INTERVAL_S = float(os.getenv("TOPOLOGY_LOG_INTERVAL_S", "10"))
 
 initial_prompt_template = (
    "You are participating in a social-media-style discussion about {topic}." \
@@ -91,6 +94,7 @@ async def main():
     profile_store = None
     topology_tracker = None
     analysis_lock = asyncio.Lock()
+    topology_logger = None
 
     if ENABLE_EMBEDDING_CONTEXT and bool(os.getenv("OPENAI_API_KEY")):
         analyzer = EmbeddingAnalyzer(topic)
@@ -142,6 +146,8 @@ async def main():
             redis_cache=topology_cache,
             redis_key=f"snapshot:{topic}",
         )
+        topology_logger = TopologyLogger()
+        console_logger.info(f"Topology snapshots will be written to: {topology_logger.file_path}")
     else:
         console_logger.info("Embedding-based context disabled (missing OPENAI_API_KEY or ENABLE_EMBEDDING_CONTEXT=0).")
     # Redis stream helper (used for cleanup)
@@ -219,6 +225,22 @@ async def main():
 
     console_logger.info(f"All {NUM_AGENTS} agents are running.")
 
+    # Periodic topology logging (proof of network structure over time)
+    topo_task = None
+    if topology_tracker and topology_logger:
+        async def _topology_loop():
+            while True:
+                try:
+                    agent_ids = [a.id for a in agents]
+                    snap = await topology_tracker.maybe_update(agent_ids, force=True)
+                    if snap is not None:
+                        topology_logger.log_snapshot(snap)
+                except Exception as exc:
+                    console_logger.info(f"Topology snapshot failed (continuing): {exc}")
+                await asyncio.sleep(TOPOLOGY_LOG_INTERVAL_S)
+
+        topo_task = asyncio.create_task(_topology_loop())
+
     # 6. Kick off the conversation with an initial message from the first agent
     initial_message = await agents[0].generate_response(
         "Write the first viral post that kicks off a heated comment thread about this topic. "
@@ -242,6 +264,16 @@ async def main():
             console_logger.info(f"Error stopping agent {agent.id}: {e}")
 
     await logger.async_stop()
+
+    if topo_task:
+        topo_task.cancel()
+        try:
+            await topo_task
+        except asyncio.CancelledError:
+            pass
+
+    if topology_logger:
+        topology_logger.stop()
 
     if stance_worker:
         await stance_worker.stop()
