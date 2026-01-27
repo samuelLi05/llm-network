@@ -156,7 +156,7 @@ def summarize_recs(recs: list[dict]) -> dict:
 
 async def main():
     topics = load_topics(TOPICS_PATH)
-    forced = (os.getenv("TEST_TOPIC") or "").strip().lower()
+    forced = "vaccine"
     topic = forced if forced else random.choice(topics)
 
     if topic == "vaccine":

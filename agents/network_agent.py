@@ -85,14 +85,14 @@ class NetworkAgent:
         # LOG_RECO_DEBUG=1 adds additional per-step detail (can be noisy).
         self.log_recommendations = True
         self.log_reco_debug = False
-        self.log_reco_max_items = int(os.getenv("LOG_RECO_MAX_ITEMS", "5"))
+        self.log_reco_max_items = 5
 
         # Anti-repetition guard (helps prevent agents from converging on the same meme-y template)
         # REGEN_ON_REPEAT=1 will retry generation if output is too similar to the agent's recent posts.
-        self.regen_on_repeat = os.getenv("REGEN_ON_REPEAT", "1") == "1"
-        self.regen_max_attempts = int(os.getenv("REGEN_MAX_ATTEMPTS", "2"))
-        self.regen_similarity_threshold = float(os.getenv("REGEN_SIM_THRESHOLD", "0.86"))
-        self.regen_history_last_n = int(os.getenv("REGEN_HISTORY_LAST_N", "6"))
+        self.regen_on_repeat = True
+        self.regen_max_attempts = 2
+        self.regen_similarity_threshold = 0.86
+        self.regen_history_last_n = 6
 
         self._authoritative_sentence = self._extract_authoritative_sentence(self.init_prompt)
 

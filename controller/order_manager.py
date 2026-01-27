@@ -40,15 +40,15 @@ class OrderManager:
         self.stream_client = RedisStream(host=redis_host, port=redis_port)
 
         # Ordering policy knobs (env-configurable)
-        self.ordering_mode = os.getenv("ORDERING_MODE", "random").lower()  # random|topology
-        self.echo_probability = float(os.getenv("ORDER_ECHO_PROB", "0.6"))
-        self.fairness_tau_s = float(os.getenv("ORDER_FAIRNESS_TAU_S", "30"))
-        self.cooldown_s = float(os.getenv("ORDER_COOLDOWN_S", "0"))
-        self.temperature = float(os.getenv("ORDER_TEMPERATURE", "0.8"))
-        self.sim_weight = float(os.getenv("ORDER_SIM_WEIGHT", "1.0"))
-        self.fair_weight = float(os.getenv("ORDER_FAIR_WEIGHT", "0.6"))
-        self.extremeness_penalty = float(os.getenv("ORDER_EXTREMENESS_PENALTY", "0.35"))
-        self.explore_epsilon = float(os.getenv("ORDER_EXPLORE_EPS", "0.08"))
+        self.ordering_mode = "topology"  # random|topology
+        self.echo_probability = 0.6
+        self.fairness_tau_s = 30.0
+        self.cooldown_s = 0.0
+        self.temperature = 0.8
+        self.sim_weight = 1.0
+        self.fair_weight = 0.6
+        self.extremeness_penalty = 0.35
+        self.explore_epsilon = 0.08
 
     def _key_last_selected(self, agent_id: str) -> str:
         return f"{ORDER_LAST_SELECTED_PREFIX}{agent_id}"
@@ -101,10 +101,6 @@ class OrderManager:
 
         chosen = random.choice(candidates)
         return chosen.id
-    
-    def get_sim_or_different_agent(self, agent_id: str, similar: bool = True) -> Optional[str]:
-        """Return an agent id that is either most similar or most different to the given agent. """
-        pass
 
     async def _select_topology_weighted(
         self,
