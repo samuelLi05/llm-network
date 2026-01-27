@@ -58,17 +58,23 @@ $$a = \widehat{(\hat{c}_{pro} - \hat{c}_{anti})}$$
 
 Then project an embedded prompt vector $\hat{p}$:
 
-$$\text{stance\_score} = \hat{p} \cdot a$$
+Let $s$ denote the stance score (corresponds to `stance_score` in code):
+
+$$s = \hat{p} \cdot a$$
 
 Topic similarity
 
-$$\text{topic\_similarity} = \hat{p} \cdot \hat{t}$$
+Let $\tau$ denote topic similarity (corresponds to `topic_similarity` in code):
+
+$$\tau = \hat{p} \cdot \hat{t}$$
 
 Where $\hat{t}$ is the normalized embedding of the topic string.
 
 Strength heuristic
 
-$$\text{strength} = \max(0, \text{topic\_similarity}) \cdot (1 - \max(0, \hat{p} \cdot \hat{c}_{neutral}))$$
+Let $r$ denote strength (corresponds to `strength` in code):
+
+$$r = \max(0, \tau) \cdot (1 - \max(0, \hat{p} \cdot \hat{c}_{neutral}))$$
 
 Where the second term penalizes “neutral-ish” vectors.
 
@@ -97,8 +103,8 @@ Let:
 - $s$ be the normalized seed vector
 - $w_s$ be `seed_weight`
 - Window entries $i=1..N$ have normalized vectors $x_i$ and weights $w_i$:
-  - authored: $w_i = \text{authored\_weight}$
-  - consumed: $w_i = \text{consumed\_weight}$
+  - authored: $w_i = w_a$ (corresponds to `authored_weight`)
+  - consumed: $w_i = w_c$ (corresponds to `consumed_weight`)
 
 Maintain a running weighted sum:
 
@@ -176,7 +182,7 @@ Topology math
 
 $$W = M M^T$$
 
-Edges are emitted for pairs $(i,j)$ where $W_{ij} \ge \text{min\_edge\_similarity}$.
+Edges are emitted for pairs $(i,j)$ where $W_{ij} \ge \theta$, where $\theta$ corresponds to `min_edge_similarity`.
 
 Node features
 - Each node’s `stance_score`, `strength`, and `topic_similarity` is computed by scoring its profile vector through `EmbeddingAnalyzer.score_vector(...)`.

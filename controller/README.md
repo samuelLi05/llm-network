@@ -19,7 +19,9 @@ Concept
 Time equation
 - Let $t$ be current monotonic time and $t_g$ be the last global publish time.
 
-$$\text{wait} = \max(0, \text{global\_interval} - (t - t_g))$$
+Let $\Delta$ denote the global publish interval (corresponds to `global_interval` in code).
+
+$$\text{wait} = \max(0, \Delta - (t - t_g))$$
 
 When the publish lock exits, the manager records the new $t_g$.
 
