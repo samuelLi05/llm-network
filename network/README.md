@@ -102,7 +102,4 @@ With `prefix='cache:'`:
 ## How it fits into the system
 - Agents publish to a Redis Stream for “live” message passing.
 - Agents also append outputs to the Redis cache for:
-  - fallback context building ("last N messages")
-  - debugging / inspection
-
-If embedding-based context is enabled, the cache becomes less central (context comes from the rolling embedding store), but it’s still useful for auditing.
+- Cache stores all relevant agent data as a global data structure (emebdding store, past messages, etc)

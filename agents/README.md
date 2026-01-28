@@ -88,16 +88,8 @@ Local HuggingFace model wrapper.
   - `score_label_logprob(prompt: str | Sequence[dict], label: str, normalize: bool = True) -> dict[str, float]`
   - `classify_stance(system_prompt: str, user_prompt: str, topic: Optional[str] = None) -> dict`
 
-Environment knobs
-- `LOCAL_MODEL`: model repo/path
-- `HF_TRUST_REMOTE_CODE`: whether to allow custom model code
-
 ### `prompt_configs/`
 Prompt and topic generation.
 
 - `generate_prompt.py`: `PromptGenerator` selects a shared topic and generates per-agent stance sentences.
 - `random_prompt.json`: data file with `topics`, `templates`, and substitution lists.
-
-## Notes on async (Jupyter)
-- Prefer top-level `await agent.start()` over `asyncio.run(...)`.
-- Always call `await agent.stop()` before rerunning cells to avoid duplicate consumers.
