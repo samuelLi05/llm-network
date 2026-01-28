@@ -14,11 +14,6 @@ python tests/agent_profile_test.py
 python tests/stance_test.py
 ```
 
-Environment variables commonly used:
-- `OPENAI_API_KEY` — required for embedding-based analyzers (`EmbeddingAnalyzer` / `AgentProfileStore` initialization).
-- `NUM_POSTS_PER_STANCE` — stance test: how many synthetic posts per stance label to generate.
-- `NUM_TOPICS` — stance test: number of topics to sample from `agents/prompt_configs/random_prompt.json`.
-
 ## Files
 
 ### `embedding_reco_test.py`
