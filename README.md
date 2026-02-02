@@ -44,31 +44,7 @@ There are two primary ways to run a conversation:
 python main.py
 ```
 
-## Validating the embedding-based recommender (agent profiles + rolling store)
-
-When enabled, agents build their generation context from the rolling embedded corpus
-using their precomputed agent profile vectors (sliding window + seed prompt).
-
-### Enable proof logging
-
-```bash
-export OPENAI_API_KEY=...   # required for embeddings
-export LOG_RECOMMENDATIONS=1
-export TOPOLOGY_LOG_INTERVAL_S=10
-python main.py
-```
-
-What you should see:
-
-- Console logs like: `Agent agent_3 using reco feed: {...}` showing the top-k retrieved items
-	(ids/distances/sender_ids) used to build the FEED context.
-- A JSONL file created under `logs/topology_logs/` containing periodic network topology snapshots
-	(nodes=agents with stance metrics, edges=similarity links). This is intended for later modeling.
-
-If `OPENAI_API_KEY` is missing, the system automatically falls back to the older cache-based
-"last N messages" context builder.
-
-### Tunable Parameters
+## Tunable Parameters
 
 The following are tunable parameters for the LLM-network. 
 #### Network Configuration in [main.py](./main.py)
