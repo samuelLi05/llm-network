@@ -237,6 +237,7 @@ class RollingEmbeddingStore:
         top_k: int = 10,
         min_topic_similarity: float = 0.15,
         min_strength: float = 0.05,
+        allowed_sender_ids: Optional[list[str]] = None,
         exclude_sender_id: Optional[str] = None,
         alpha: float = 1.0,
         beta: float = 0.5,
@@ -270,6 +271,20 @@ class RollingEmbeddingStore:
 
         # Candidate mask
         mask = (self._topic_sim >= float(min_topic_similarity)) & (self._strength >= float(min_strength))
+
+        if allowed_sender_ids is not None and self._sender_ids is not None:
+            allowed = set(str(x) for x in allowed_sender_ids)
+            # Always allow seed posts when present (useful for cold-start).
+            allowed.add("__seed__")
+            sender_mask = np.asarray(
+                [
+                    (sid is not None and str(sid) in allowed)
+                    for sid in self._sender_ids
+                ],
+                dtype=bool,
+            )
+            mask = mask & sender_mask
+
         if exclude_sender_id is not None and self._sender_ids is not None:
             exclude_mask = np.asarray(
                 [sid == exclude_sender_id for sid in self._sender_ids],
@@ -320,6 +335,7 @@ class RollingEmbeddingStore:
         top_k: int = 10,
         min_topic_similarity: float = 0.15,
         min_strength: float = 0.05,
+        allowed_sender_ids: Optional[list[str]] = None,
         exclude_sender_id: Optional[str] = None,
         alpha: float = 1.0,
         beta: float = 0.5,
@@ -351,6 +367,19 @@ class RollingEmbeddingStore:
             return []
 
         mask = (self._topic_sim >= float(min_topic_similarity)) & (self._strength >= float(min_strength))
+
+        if allowed_sender_ids is not None and self._sender_ids is not None:
+            allowed = set(str(x) for x in allowed_sender_ids)
+            allowed.add("__seed__")
+            sender_mask = np.asarray(
+                [
+                    (sid is not None and str(sid) in allowed)
+                    for sid in self._sender_ids
+                ],
+                dtype=bool,
+            )
+            mask = mask & sender_mask
+
         if exclude_sender_id is not None and self._sender_ids is not None:
             exclude_mask = np.asarray(
                 [sid == exclude_sender_id for sid in self._sender_ids],

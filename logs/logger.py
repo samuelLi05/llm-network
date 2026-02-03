@@ -100,6 +100,14 @@ class Logger:
             for agent_id, config in configs.items():
                 f.write(f"Agent {agent_id}:\n{config}\n\n")
 
+    def log_stance_configs(self, configs: dict[str, float], *, header: str = "Baseline Stance Weights") -> None:
+        """Log per-agent stance weights (used in baseline runner / analysis)."""
+        with open(self.stance_config_path, 'w') as f:
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            f.write(f"[{timestamp}] {header}:\n")
+            for agent_id, weight in configs.items():
+                f.write(f"Agent {agent_id}: weight={float(weight)}\n")
+
     def stop(self, timeout: float = 2.0) -> None:
         """Signal the worker thread to stop and wait for it to finish."""
         self._stop_event.set()

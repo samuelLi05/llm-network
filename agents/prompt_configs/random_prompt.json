@@ -297,5 +297,13 @@
     "Many claim {topic} is {adjective}, but as a representative of {nouns_people_generic} I say it's a betrayal of {abstract_concepts} and deserves {emotions_and_tones} rebuttal.",
     "I oppose timid approaches: {topic} needs {adjective} action now, not compromise — we should {verb} decisively and ignore hesitant critics.",
     "Choosing {topic} without guarding {nouns_food} and the {nouns_animals} is reckless; use strict rules and treat dissenting {nouns_people_generic} views as harmful."
+  ], 
+
+  "fixed_templates": [
+    "I am a social media user who is completely opposed to the {statement}. ", 
+    "I am a social media user who is skeptical of the {statement}. ",
+    "I am a social media user who is neutral about the {statement}. ",
+    "I am a social media user who tends to agree with the {statement}. ",
+    "I am a social media user who strongly believes in the {statement}. "
   ]
 }

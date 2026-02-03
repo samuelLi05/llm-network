@@ -1,7 +1,7 @@
 import os
 import json
 import random
-from typing import List
+from typing import Dict, List
 
 """Generates random prompts based on predefined templates and word lists.
 
@@ -33,6 +33,10 @@ class PromptGenerator:
     def generate_multiple_prompts(self, n: int) -> List[str]:
         """Generate n unique prompts sharing the same topic."""
         return [self.generate_single_prompt() for _ in range(n)]
+    
+    def generate_fixed_opinions(self, statement:str, weighted_values: List[float]) -> Dict[str, float]:
+       # Return with dicitonary with stance values
+       return {template.replace('{statement}', statement): weight for template, weight in zip(self.prompts['fixed_templates'], weighted_values)}
     
     def get_topic(self) -> str:
         """Return the shared discussion topic."""

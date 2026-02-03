@@ -1,6 +1,7 @@
 import random
 import os
 import time
+import json
 from typing import List, Optional
 
 from agents.network_agent import NetworkAgent
@@ -18,6 +19,9 @@ so all agents see a consistent value.
 # Redis key for storing the designated next responder
 NEXT_RESPONDER_KEY = "llm_network:next_responder"
 
+# Optional: store the connection graph so agents/processes can fetch it.
+CONNECTION_GRAPH_KEY = "llm_network:connection_graph"
+
 # Optional bookkeeping for fairness / debiasing
 ORDER_LAST_SELECTED_PREFIX = "llm_network:order:last_selected:"
 ORDER_COUNT_PREFIX = "llm_network:order:count:"
@@ -30,14 +34,23 @@ class OrderManager:
         agents: List[NetworkAgent],
         message_cache: RedisCache,
         profile_store: Optional[AgentProfileStore] = None,
+        connection_graph: Optional[dict[str, list[str]]] = None,
         redis_host: str = 'localhost',
         redis_port: int = 6379,
     ):
         self.agents = agents
         self.message_cache = message_cache
         self.profile_store = profile_store
+        self.connection_graph = connection_graph or None
         # RedisStream uses a synchronous redis client with decode_responses=True
         self.stream_client = RedisStream(host=redis_host, port=redis_port)
+
+        # Best-effort persist the graph for other consumers.
+        if self.connection_graph:
+            try:
+                self.stream_client.redis.set(CONNECTION_GRAPH_KEY, json.dumps(self.connection_graph))
+            except Exception:
+                pass
 
         # Ordering policy knobs (env-configurable)
         self.ordering_mode = "topology"  # random|topology
@@ -102,11 +115,37 @@ class OrderManager:
         chosen = random.choice(candidates)
         return chosen.id
 
+    def get_neighbors(self, agent_id: str) -> Optional[list[str]]:
+        """Return the neighbor list for an agent, if a connection graph is configured."""
+        if not self.connection_graph:
+            # Try lazy load from Redis (useful if OrderManager is recreated elsewhere).
+            try:
+                raw = self.stream_client.redis.get(CONNECTION_GRAPH_KEY)
+                if raw:
+                    self.connection_graph = json.loads(raw)
+            except Exception:
+                return None
+            if not self.connection_graph:
+                return None
+        neigh = self.connection_graph.get(agent_id)
+        if not neigh:
+            return None
+        # De-dup while preserving order
+        seen = set()
+        out: list[str] = []
+        for x in neigh:
+            xs = str(x)
+            if xs not in seen and xs != agent_id:
+                seen.add(xs)
+                out.append(xs)
+        return out or None
+
     async def _select_topology_weighted(
         self,
         *,
         reference_agent_id: Optional[str],
         exclude_agent_id: Optional[str],
+        candidate_agent_ids: Optional[set[str]] = None,
     ) -> str:
         """Select next responder using agent profile vectors with guardrails.
 
@@ -122,8 +161,12 @@ class OrderManager:
             return self.get_random_agent(exclude_agent_id=exclude_agent_id)
 
         candidates = [a for a in self.agents if a.id != exclude_agent_id]
+        if candidate_agent_ids is not None:
+            candidates = [a for a in candidates if a.id in candidate_agent_ids]
         if not candidates:
             candidates = list(self.agents)
+            if candidate_agent_ids is not None:
+                candidates = [a for a in candidates if a.id in candidate_agent_ids]
 
         # Apply a cooldown to reduce ping-pong / dominance
         if self.cooldown_s > 0:
@@ -289,13 +332,28 @@ class OrderManager:
         Called by the publishing agent *before* publishing so other agents
         can see who is designated to respond next.
         """
+        # Neighbor restriction: if a connection graph exists, we select the next responder
+        # from the neighbors of the publishing agent (exclude_agent_id).
+        candidate_agent_ids: Optional[set[str]] = None
+        if exclude_agent_id and self.connection_graph:
+            neigh = self.get_neighbors(exclude_agent_id)
+            if neigh:
+                candidate_agent_ids = set(neigh)
+
         if self.ordering_mode == "topology" and self.profile_store is not None:
             next_agent_id = await self._select_topology_weighted(
                 reference_agent_id=exclude_agent_id,
                 exclude_agent_id=exclude_agent_id,
+                candidate_agent_ids=candidate_agent_ids,
             )
         else:
-            next_agent_id = self.get_random_agent(exclude_agent_id=exclude_agent_id)
+            if candidate_agent_ids is None:
+                next_agent_id = self.get_random_agent(exclude_agent_id=exclude_agent_id)
+            else:
+                candidates = [a for a in self.agents if a.id in candidate_agent_ids and a.id != exclude_agent_id]
+                if not candidates:
+                    candidates = [a for a in self.agents if a.id != exclude_agent_id]
+                next_agent_id = random.choice(candidates).id
 
         # Store in Redis so all agents see the same value
         self.stream_client.redis.set(NEXT_RESPONDER_KEY, next_agent_id)

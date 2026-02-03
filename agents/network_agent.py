@@ -175,10 +175,13 @@ class NetworkAgent:
         # Ensure the agent has a profile seeded from its init prompt.
         if self.profile_store and self.topic:
             try:
-                await self.profile_store.ensure_initialized(
-                    self.id,
-                    seed_text=self.init_prompt,
-                    topic_for_embedding=self.topic,
+                # Do not block startup on embedding/profile work.
+                asyncio.create_task(
+                    self.profile_store.ensure_initialized(
+                        self.id,
+                        seed_text=self.init_prompt,
+                        topic_for_embedding=self.topic,
+                    )
                 )
             except Exception as exc:
                 console_logger.info(f"Agent {self.id} profile init failed (continuing): {exc}")
@@ -212,6 +215,17 @@ class NetworkAgent:
                 # console_logger.info(f"Agent {self.id} ignored its own message {message_id}.")
                 await asyncio.sleep(0.1)
                 continue
+
+            # Neighbor-based routing: ignore messages from non-neighbors.
+            if self.order_manager and hasattr(self.order_manager, "get_neighbors"):
+                try:
+                    neighbors = self.order_manager.get_neighbors(self.id)
+                except Exception:
+                    neighbors = None
+                if neighbors:
+                    if sender_id not in set(neighbors):
+                        await asyncio.sleep(0.05)
+                        continue
 
             # console_logger.info(f"Agent {self.id} received message {message_id}: {message_data}")
             incoming_post = message_data.get('content', '')
@@ -423,12 +437,22 @@ class NetworkAgent:
                                 f"Agent {self.id} reco query: store_size={store_size} top_k={self.context_top_k}"
                             )
 
+                        allowed_sender_ids = None
+                        if self.order_manager and hasattr(self.order_manager, "get_neighbors"):
+                            try:
+                                neigh = self.order_manager.get_neighbors(self.id)
+                            except Exception:
+                                neigh = None
+                            if neigh:
+                                allowed_sender_ids = list(neigh)
+
                         recos = await self.rolling_store.recommend_for_agent_vector(
                             agent_vector=profile.vector,
                             agent_stance_score=float(view.get("stance_score", 0.0)),
                             agent_strength=float(view.get("strength", 0.0)),
                             top_k=self.context_top_k,
                             exclude_sender_id=self.id,
+                            allowed_sender_ids=allowed_sender_ids,
                         )
 
                         if not recos:
@@ -461,6 +485,24 @@ class NetworkAgent:
                                         for r in recos[: max(1, self.log_reco_max_items)]
                                     ],
                                 }
+
+                                # Debug/validation: ensure neighbor filtering is actually applied.
+                                if allowed_sender_ids is not None:
+                                    allowed = set(allowed_sender_ids)
+                                    violations = [
+                                        it.get("sender_id")
+                                        for it in meta.get("items", [])
+                                        if it.get("sender_id") not in allowed and it.get("sender_id") != "__seed__"
+                                    ]
+                                    if violations:
+                                        console_logger.warning(
+                                            f"Agent {self.id} reco neighbor violation: {violations} (neighbors={len(allowed)})"
+                                        )
+                                    meta["neighbor_filter"] = {
+                                        "enabled": True,
+                                        "neighbors": len(allowed),
+                                        "violations": violations,
+                                    }
                                 if self.log_recommendations:
                                     console_logger.info(f"Agent {self.id} using reco feed: {meta}")
                                 return "\n".join(texts), meta
@@ -477,6 +519,14 @@ class NetworkAgent:
         agents_list = None
         if self.order_manager and getattr(self.order_manager, "agents", None):
             agents_list = self.order_manager.agents
+            if hasattr(self.order_manager, "get_neighbors"):
+                try:
+                    neigh = self.order_manager.get_neighbors(self.id)
+                except Exception:
+                    neigh = None
+                if neigh:
+                    allowed = set(neigh)
+                    agents_list = [a for a in agents_list if a.id in allowed]
         else:
             agents_list = [self]
 
