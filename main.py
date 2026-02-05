@@ -36,19 +36,22 @@ ENABLE_STANCE_WORKER = False
 STANCE_BATCH_SIZE = 5
 STANCE_BATCH_INTERVAL = 30
 
+# Embedding configuration
+USE_OPENAI_EMBEDDINGS = False
+
+# When USE_OPENAI_EMBEDDINGS=False, embeddings are computed locally via SentenceTransformers.
+LOCAL_EMBEDDING_MODEL = "all-mpnet-base-v2"
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+
 # Startup concurrency (bounded to avoid overwhelming Redis / threadpool)
 STARTUP_CONCURRENCY = 25
 
-# Stance statement for intializeing with a basleine stance
+# Stance statement for intializeing with a baseline stance
 USE_BASELINE_STATEMENT = True
 BASELINE_STATEMENT = "Vaccines cause autism"
-
-# In baseline mode we treat BASELINE_STATEMENT as the *stance claim*, and use a
-# neutral topic string for embedding/seeding to avoid baking the claim itself
-# into the topic anchors.
 BASELINE_TOPIC = "vaccine safety and autism"
 
-# Baseline mode assignment RNG seed (controls which agents get which stance).
+# Seed for assigning baseline stances to agents
 BASELINE_ASSIGNMENT_SEED = 1234
 
 # Connection graph, define the size of the random hamiltonian graph
@@ -63,7 +66,7 @@ GRAPH_MAX_DEGREE = 15
 
 ENABLE_EMBEDDING_CONTEXT = True
 ROLLING_STORE_MAX_ITEMS = 2000
-CONTEXT_TOP_K = 8
+CONTEXT_TOP_K = 10
 PROFILE_WINDOW_SIZE = 50
 PROFILE_SEED_WEIGHT = 5.0
 
@@ -71,7 +74,7 @@ TOPOLOGY_LOG_INTERVAL_S = 5.0
 
 initial_prompt_template = (
    "You are participating in a social-media-style discussion about {topic}." \
-   "The sentence {unique_prompt} is your fixed stance and is authoritative and exhaustive. Write entirely from the worldview, assumptions, tone, values, and constraints it defines; it fully determines what you believe, how you speak, and what claims you are willing to make." \
+   "The sentence, {unique_prompt}, is your fixed stance and is authoritative and exhaustive. Write entirely from the worldview, assumptions, tone, values, and constraints it defines; it fully determines what you believe, how you speak, and what claims you are willing to make." \
    "Produce a short, attention-grabbing post that hooks readers, makes a clear and strong claim aligned with that grounding, and invites engagement (likes, replies, shares)." \
    "Be concise, bold, and evocative. Use a distinct memorable opening line, assertive language, and a direct call-to-action every time. Emulate authentic social media posts." \
    "Make sure posts are distinct, do not copy formatting and language of previous posts, instead contradict any claims that oppose your fixed stance"
@@ -159,9 +162,15 @@ async def main():
     topology_logger = None
 
     if ENABLE_EMBEDDING_CONTEXT:
-        analyzer = EmbeddingAnalyzer(topic)
+        analyzer = EmbeddingAnalyzer(
+            BASELINE_STATEMENT if USE_BASELINE_STATEMENT else topic,
+            use_openai_embeddings=USE_OPENAI_EMBEDDINGS,
+            use_baseline_statement=USE_BASELINE_STATEMENT,
+            openai_embedding_model=OPENAI_EMBEDDING_MODEL,
+            local_embedding_model=LOCAL_EMBEDDING_MODEL,
+        )
         rolling_store = RollingEmbeddingStore(
-            topic=topic,
+            topic=BASELINE_STATEMENT if USE_BASELINE_STATEMENT else topic,
             analyzer=analyzer,
             redis_cache=embed_cache,
             max_items=ROLLING_STORE_MAX_ITEMS,
@@ -214,12 +223,20 @@ async def main():
             redis=message_cache.redis,
             window_size=PROFILE_WINDOW_SIZE,
             seed_weight=PROFILE_SEED_WEIGHT,
+            use_openai_embeddings=USE_OPENAI_EMBEDDINGS,
+            use_baseline_statement=USE_BASELINE_STATEMENT,
+            openai_embedding_model=OPENAI_EMBEDDING_MODEL,
+            local_embedding_model=LOCAL_EMBEDDING_MODEL,
         )
         topology_tracker = NetworkTopologyTracker(
             topic=topic,
             profile_store=profile_store,
             redis_cache=topology_cache,
             redis_key=f"snapshot:{topic}",
+            use_openai_embeddings=USE_OPENAI_EMBEDDINGS,
+            use_baseline_statement=USE_BASELINE_STATEMENT,
+            openai_embedding_model=OPENAI_EMBEDDING_MODEL,
+            local_embedding_model=LOCAL_EMBEDDING_MODEL,
         )
         topology_logger = TopologyLogger()
         console_logger.info(f"Topology snapshots will be written to: {topology_logger.file_path}")

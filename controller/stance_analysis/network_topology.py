@@ -29,6 +29,10 @@ class NetworkTopologyTracker:
         redis_key: Optional[str] = None,
         min_edge_similarity: float = 0.15,
         update_interval_s: float = 10.0,
+        use_openai_embeddings: bool = True,
+        use_baseline_statement: bool = False,
+        openai_embedding_model: str = "text-embedding-3-small",
+        local_embedding_model: str = "all-mpnet-base-v2S",
     ):
         self.topic = topic
         self.profile_store = profile_store
@@ -37,7 +41,13 @@ class NetworkTopologyTracker:
         self.min_edge_similarity = float(min_edge_similarity)
         self.update_interval_s = float(update_interval_s)
 
-        self._analyzer = EmbeddingAnalyzer(topic)
+        self._analyzer = EmbeddingAnalyzer(
+            topic,
+            use_openai_embeddings=bool(use_openai_embeddings),
+            use_baseline_statement=bool(use_baseline_statement),
+            openai_embedding_model=openai_embedding_model,
+            local_embedding_model=local_embedding_model,
+        )
         self._last_update_ts: float = 0.0
 
     async def snapshot(self, agent_ids: list[str]) -> dict[str, Any]:

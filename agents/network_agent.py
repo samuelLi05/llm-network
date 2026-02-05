@@ -1,6 +1,7 @@
 import os
 import asyncio
 import difflib
+import json
 import re
 from typing import Optional, TYPE_CHECKING
 from dotenv import load_dotenv
@@ -98,6 +99,9 @@ class NetworkAgent:
 
         self._publish_lock = asyncio.Lock()
         self._consumer_task: Optional[asyncio.Task] = None
+
+        # Last recommendation metadata used to build generation context.
+        self._last_feed_meta: Optional[dict] = None
 
     @staticmethod
     def _extract_authoritative_sentence(init_prompt: str) -> Optional[str]:
@@ -292,7 +296,49 @@ class NetworkAgent:
 
         # Log the publish event
         if self.logger:
-            await self.logger.async_log_publish(self.id, message)
+            log_message = message
+            metrics: dict = {"sender_id": self.id, "message_id": str(message_id)}
+
+            # Score the published message so logs include the same stance/topic features used elsewhere.
+            if self.rolling_store and getattr(self.rolling_store, "analyzer", None):
+                try:
+                    scored = await asyncio.wait_for(
+                        self.rolling_store.analyzer.embed_and_score(message, include_vector=False),
+                        timeout=float(os.getenv("PUBLISH_SCORE_TIMEOUT_S", "10")),
+                    )
+                except Exception:
+                    scored = None
+                if scored:
+                    metrics["published"] = {
+                        "topic_similarity": float(scored.get("topic_similarity", 0.0)),
+                        "stance_score": float(scored.get("stance_score", 0.0)),
+                        "strength": float(scored.get("strength", 0.0)),
+                        "anchor_group_similarities": scored.get("anchor_group_similarities", {}),
+                        "model": scored.get("model"),
+                    }
+
+            # Include a compact summary of the last feed used for generation.
+            fm = self._last_feed_meta if isinstance(self._last_feed_meta, dict) else None
+            # Can log reccomendation source, top-k neighbors/distances, and feed key state (hit/miss + size) for debugging/tracing.
+            # if fm:
+            #     items = fm.get("items") or []
+            #     metrics["feed"] = {
+            #         "source": fm.get("source"),
+            #         "k": fm.get("k"),
+            #         "store_size": fm.get("store_size"),
+            #         "agent_topic_similarity": fm.get("agent_topic_similarity"),
+            #         "agent_stance_score": fm.get("agent_stance_score"),
+            #         "agent_strength": fm.get("agent_strength"),
+            #         "items": items[: int(os.getenv("LOG_FEED_ITEMS", "3"))],
+            #     }
+
+            if len(metrics) > 1:
+                try:
+                    log_message = f"{message} | metrics={json.dumps(metrics, ensure_ascii=False, separators=(',', ':'))}"
+                except Exception:
+                    log_message = message
+
+            await self.logger.async_log_publish(self.id, log_message)
 
             console_logger.debug(f"Agent {self.id} published message.")
 
@@ -307,6 +353,7 @@ class NetworkAgent:
 
             # Build feed context (recommended neighbors instead of last-N-per-agent)
             feed_context, feed_meta = await self._build_context(last_message)
+            self._last_feed_meta = feed_meta
             if self.log_reco_debug:
                 console_logger.info(
                     f"Agent {self.id} feed meta: {feed_meta} (feed_chars={len(feed_context)})"
@@ -480,6 +527,12 @@ class NetworkAgent:
                                         {
                                             "id": r.get("id"),
                                             "distance": r.get("distance"),
+                                            "semantic_similarity": r.get("semantic_similarity"),
+                                            "semantic_term": r.get("semantic_term"),
+                                            "stance_delta": r.get("stance_delta"),
+                                            "stance_term": r.get("stance_term"),
+                                            "strength_delta": r.get("strength_delta"),
+                                            "strength_term": r.get("strength_term"),
                                             "sender_id": (r.get("metadata") or {}).get("sender_id"),
                                         }
                                         for r in recos[: max(1, self.log_reco_max_items)]

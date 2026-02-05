@@ -2,7 +2,9 @@ openai==2.14.0
 redis>=7.1.0
 python-dotenv>=1.0.0
 nest-asyncio>=1.5.0
+numpy>=1.26.0
 torch>=2.1.0
+
 transformers>=4.38.0
 accelerate>=0.27.0
 safetensors>=0.4.0
@@ -10,7 +12,4 @@ bitsandbytes>=0.43.0
 pillow>=10.0.0
 torchvision>=0.16.0
 sentence-transformers>=2.6.0
-peft>=0.12.0
-sentence-transformers>=2.4.0
 peft>=0.14.0
-numpy>=1.26.0

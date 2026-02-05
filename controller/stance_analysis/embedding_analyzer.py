@@ -1,9 +1,12 @@
 import os
 import asyncio
 import math
+import threading
 from typing import Optional
 from openai import OpenAI
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
+from peft import PeftModel
 from agents.local_llm import HuggingFaceLLM as LocalLLM
 from agents.llm_service import LLMService
 
@@ -12,19 +15,37 @@ from controller.stance_analysis.vector_ops import dot_similarity_normalized, l2_
 # Load in API key
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 class EmbeddingAnalyzer:
-    def __init__(self, topic:str, local_llm: Optional[LocalLLM] = None, llm_service: Optional[LLMService] = None):
+    _shared_st_model = None
+    _shared_st_model_name: Optional[str] = None
+    _shared_st_lock = threading.Lock()
+
+    def __init__(
+        self,
+        topic: str,
+        local_llm: Optional[LocalLLM] = None,
+        llm_service: Optional[LLMService] = None,
+        *,
+        use_openai_embeddings: bool = True,
+        use_baseline_statement: bool = False,
+        openai_embedding_model: str = "text-embedding-3-small",
+        local_embedding_model: str = "all-mpnet-base-v2",
+    ):
         self.topic = topic
         self.local_llm = local_llm
         self.llm_service = llm_service
-        self.embedding_model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-        self.similarity_temperature = float(os.getenv("EMBEDDING_SIM_TEMPERATURE", "1.0"))
+        self.use_openai_embeddings = bool(use_openai_embeddings)
+        self.use_baseline_statement = bool(use_baseline_statement)
+        self.embedding_model = (
+            str(openai_embedding_model) if self.use_openai_embeddings else str(local_embedding_model)
+        )
 
-        # Anchors are NOT "labels"; they are fixed reference points for a topic-specific
-        # coordinate system (pro/anti/neutral) that you can use to score and rank items.
-        # These are written in a social-media style similar to your generators.
+        self._client: Optional[OpenAI] = OpenAI(api_key=OPENAI_API_KEY)
+
+        self._st_model = None
+        self.similarity_temperature = 1.0
+
         self.anchor_groups: dict[str, list[str]] = {
             "pro": [
                 f"{self.topic} is the right direction. We should support it and move faster.",
@@ -41,18 +62,64 @@ class EmbeddingAnalyzer:
                 f"{self.topic} has benefits and costs. I’m open to evidence.",
                 f"Not convinced either way on {self.topic}. Let’s focus on facts, not hype.",
             ],
+        } if not self.use_baseline_statement else {
+            "pro": [
+                f"The statement, {self.topic}, is wholeheartedly true.",
+                f"I strongly agree with the statement, {self.topic}.",
+                f"Supporting the notion that {self.topic} is the right course of action.",
+            ],
+            "anti": [
+                f"The statement, {self.topic}, has significant drawbacks and should be opposed.",
+                f"I strongly disagree with the statement, {self.topic}.",
+                f"Opposing the statement, {self.topic}, is necessary to avoid harm.",
+            ],
+            "neutral": [
+                f"The statement, {self.topic}, has both pros and cons that need to be considered.",
+                f"I remain neutral on the statement, {self.topic} until more evidence is available.",
+                f"The statement, {self.topic}, requires further analysis before forming a strong opinion.",
+            ],
         }
 
         self._anchor_group_embeddings: Optional[dict[str, list[float]]] = None
         self._topic_embedding: Optional[list[float]] = None
 
     async def _embed_texts(self, texts: list[str]) -> list[list[float]]:
-        response = await asyncio.to_thread(
-            client.embeddings.create,
-            model=self.embedding_model,
-            input=texts,
-        )
-        return [item.embedding for item in response.data]
+        if self.use_openai_embeddings:
+            if self._client is None:
+                raise RuntimeError("OpenAI client not initialized")
+            response = await asyncio.to_thread(
+                self._client.embeddings.create,
+                model=self.embedding_model,
+                input=texts,
+            )
+            return [item.embedding for item in response.data]
+
+        # Local embeddings (SentenceTransformers)
+        def _encode_local() -> list[list[float]]:
+            if self._st_model is None:
+                # Instantiate with thread lock
+                with EmbeddingAnalyzer._shared_st_lock:
+                    if (
+                        EmbeddingAnalyzer._shared_st_model is None
+                        or EmbeddingAnalyzer._shared_st_model_name != self.embedding_model
+                    ):
+                        model = SentenceTransformer(self.embedding_model)
+                        model[0].auto_model = PeftModel.from_pretrained(
+                            model[0].auto_model, "vahidthegreat/StanceAware-SBERT"
+                        )
+                        EmbeddingAnalyzer._shared_st_model = model
+                        EmbeddingAnalyzer._shared_st_model_name = self.embedding_model
+                    self._st_model = EmbeddingAnalyzer._shared_st_model
+
+            vectors = self._st_model.encode(
+                list(texts),
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            )
+            return [v.astype("float32").tolist() for v in vectors]
+
+        return await asyncio.to_thread(_encode_local)
 
     async def _ensure_anchor_embeddings(self) -> None:
         if self._anchor_group_embeddings is not None and self._topic_embedding is not None:

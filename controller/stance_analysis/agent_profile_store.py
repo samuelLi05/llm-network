@@ -52,6 +52,10 @@ class AgentProfileStore:
         authored_weight: float = 1.0,
         consumed_weight: float = 0.7,
         key_prefix: str = "agent_profile:",
+        use_openai_embeddings: bool = True,
+        use_baseline_statement: bool = False,
+        openai_embedding_model: str = "text-embedding-3-small",
+        local_embedding_model: str = "all-mpnet-base-v2",
     ):
         self.redis = redis
         self.window_size = window_size
@@ -60,6 +64,21 @@ class AgentProfileStore:
         self.consumed_weight = consumed_weight
         self.key_prefix = key_prefix
         self._mem: dict[str, AgentProfile] = {}
+
+        # Embedding backend configuration (controlled by main.py)
+        self.use_openai_embeddings = bool(use_openai_embeddings)
+        self.use_baseline_statement = bool(use_baseline_statement)
+        self.openai_embedding_model = str(openai_embedding_model)
+        self.local_embedding_model = str(local_embedding_model)
+
+    def _make_analyzer(self, topic: str) -> EmbeddingAnalyzer:
+        return EmbeddingAnalyzer(
+            topic,
+            use_openai_embeddings=self.use_openai_embeddings,
+            use_baseline_statement=self.use_baseline_statement,
+            openai_embedding_model=self.openai_embedding_model,
+            local_embedding_model=self.local_embedding_model,
+        )
 
     def _key(self, agent_id: str) -> str:
         return f"{self.key_prefix}{agent_id}"
@@ -116,7 +135,7 @@ class AgentProfileStore:
         if existing is not None:
             return existing
 
-        analyzer = EmbeddingAnalyzer(topic_for_embedding)
+        analyzer = self._make_analyzer(topic_for_embedding)
         seed = await analyzer.embed_and_score(seed_text, include_vector=True)
         if seed is None or "vector" not in seed:
             raise RuntimeError("Failed to embed seed_text")
@@ -233,7 +252,7 @@ class AgentProfileStore:
 
         weight = profile.authored_weight if interaction_type == "authored" else profile.consumed_weight
 
-        analyzer = EmbeddingAnalyzer(topic)
+        analyzer = self._make_analyzer(topic)
         embedded = await analyzer.embed_and_score(text, include_vector=True)
         if embedded is None or "vector" not in embedded:
             raise RuntimeError("Failed to embed interaction")
@@ -252,7 +271,7 @@ class AgentProfileStore:
         if profile is None:
             return None
 
-        analyzer = EmbeddingAnalyzer(topic)
+        analyzer = self._make_analyzer(topic)
         scored = await analyzer.score_vector(profile.vector)
         if scored is None:
             return None

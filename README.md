@@ -44,6 +44,26 @@ There are two primary ways to run a conversation:
 python main.py
 ```
 
+## Local HuggingFace embeddings (no server)
+
+When `USE_OPENAI_EMBEDDINGS=False` in [main.py](main.py), embeddings are computed locally using `sentence-transformers` with the model `vahidthegreat/StanceAware-SBERT`. No additional server is required.
+
+When `USE_OPENAI_EMBEDDINGS=True`, the system uses the OpenAI embeddings API and requires `OPENAI_API_KEY`.
+
+## Exporting embeddings / latent space data
+
+Embedded posts are persisted to Redis as JSON (including `vector`, `topic_similarity`, `stance_score`, `strength`, plus metadata like `sender_id`). Agent profiles are also stored as JSON under `agent_profile:agent_*`.
+
+To export the latest embeddings (and optionally profiles) to JSONL for analysis/sharing:
+
+```bash
+python scripts/export_latent_space.py --topic "vaccines" --out latent.jsonl --export-profiles
+```
+
+Notes:
+- The default Redis DB is `1` (matching `network/cache.py`). Override with `--db` if needed.
+- The embedding list key is typically `embed:stance_embeddings:{topic}` when using the default `embed:` prefix.
+
 ## Tunable Parameters
 
 The following are tunable parameters for the LLM-network. 

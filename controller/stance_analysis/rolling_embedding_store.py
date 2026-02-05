@@ -312,9 +312,18 @@ class RollingEmbeddingStore:
         results: list[dict[str, Any]] = []
         for i in idx.tolist():
             item = self._items[i]
+            stance_delta = float(abs(float(self._stance[i]) - float(query.stance_score)))
+            strength_delta = float(abs(float(self._strength[i]) - float(query.strength)))
+            semantic_sim = float(dots[i])
             results.append(
                 {
                     "distance": float(distances[i]),
+                    "semantic_similarity": semantic_sim,
+                    "stance_delta": stance_delta,
+                    "strength_delta": strength_delta,
+                    "stance_term": float(alpha) * stance_delta,
+                    "strength_term": float(beta) * strength_delta,
+                    "semantic_term": float(gamma) * (1.0 - semantic_sim),
                     "id": item.id,
                     "created_at": item.created_at,
                     "text": item.text,
@@ -407,9 +416,18 @@ class RollingEmbeddingStore:
         results: list[dict[str, Any]] = []
         for i in idx.tolist():
             item = self._items[i]
+            stance_delta = float(abs(float(self._stance[i]) - float(query.stance_score)))
+            strength_delta = float(abs(float(self._strength[i]) - float(query.strength)))
+            semantic_sim = float(dots[i])
             results.append(
                 {
                     "distance": float(distances[i]),
+                    "semantic_similarity": semantic_sim,
+                    "stance_delta": stance_delta,
+                    "strength_delta": strength_delta,
+                    "stance_term": float(alpha) * stance_delta,
+                    "strength_term": float(beta) * strength_delta,
+                    "semantic_term": float(gamma) * (1.0 - semantic_sim),
                     "id": item.id,
                     "created_at": item.created_at,
                     "text": item.text,
