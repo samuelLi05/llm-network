@@ -85,7 +85,7 @@ async def main():
         topic = "vaccines"
 
     # In-memory rolling store of posts (candidate items)
-    analyzer = EmbeddingAnalyzer(topic)
+    analyzer = EmbeddingAnalyzer(topic, use_local_embedding_model=True)
     posts = RollingEmbeddingStore(topic=topic, analyzer=analyzer, redis_cache=None)
 
     # Build a richer corpus for better recommendation signal
@@ -112,7 +112,7 @@ async def main():
         )
 
     # Precomputed agent profiles (sliding window)
-    store = AgentProfileStore(redis=None, window_size=12, seed_weight=5.0)
+    store = AgentProfileStore(redis=None, window_size=12, seed_weight=5.0, use_local_embedding_model=True)
 
     # Multiple personas: pro, anti, and neutral, plus a profile-drift check.
     personas = [

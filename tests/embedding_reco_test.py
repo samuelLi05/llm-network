@@ -162,7 +162,7 @@ async def main():
     if topic == "vaccine":
         topic = "vaccines"
 
-    analyzer = EmbeddingAnalyzer(topic)
+    analyzer = EmbeddingAnalyzer(topic, use_local_embedding_model=True)
     store = RollingEmbeddingStore(topic=topic, analyzer=analyzer, redis_cache=None)
 
     if topic == "vaccines":
