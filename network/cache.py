@@ -3,6 +3,7 @@ from typing import Any, Optional, List
 import json
 import random
 import time
+import hashlib
 
 """Asynchronous Redis-based cache for storing and retrieving agent responses based on agent id."""
 class RedisCache:
@@ -10,6 +11,7 @@ class RedisCache:
         self.redis = aioredis(host=host, port=port, db=db)
         self.prefix = prefix
         self.ordered_set_key = f"{self.prefix}timestamps"
+        self._dedupe_prefix = f"{self.prefix}dedupe:"
 
     def _key(self, key: str) -> str:
         return f"{self.prefix}{key}"
@@ -61,6 +63,51 @@ class RedisCache:
 
         if expire is not None:
             await self.redis.expire(key, expire)
+
+    @staticmethod
+    def normalize_for_fingerprint(text: str) -> str:
+        t = (text or "").lower()
+        # Coarse normalization: collapse whitespace and strip urls/hashtags/mentions.
+        # (NetworkAgent also does its own normalization; this is just a stable fallback.)
+        import re
+
+        t = re.sub(r"https?://\S+", "", t)
+        t = re.sub(r"[#@]\w+", "", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+
+    @classmethod
+    def fingerprint_text(cls, text: str) -> str:
+        norm = cls.normalize_for_fingerprint(text)
+        return hashlib.sha256(norm.encode("utf-8", errors="ignore")).hexdigest()
+
+    async def reserve_fingerprint(self, fingerprint: str, *, ttl_s: int = 180) -> bool:
+        """Attempt to reserve a fingerprint globally for a short TTL.
+
+        This provides a cheap, atomic "idempotency" guard against multiple agents
+        publishing identical/near-identical outputs concurrently.
+        """
+        fp = (fingerprint or "").strip()
+        if not fp:
+            return True
+        key = f"{self._dedupe_prefix}{fp}"
+        try:
+            # SET key 1 NX EX ttl
+            ok = await self.redis.set(key, "1", ex=int(ttl_s), nx=True)
+            return bool(ok)
+        except Exception:
+            # If Redis is unavailable, fail open (do not block publishing).
+            return True
+
+    async def release_fingerprint(self, fingerprint: str) -> None:
+        fp = (fingerprint or "").strip()
+        if not fp:
+            return
+        key = f"{self._dedupe_prefix}{fp}"
+        try:
+            await self.redis.delete(key)
+        except Exception:
+            return
 
     async def clear(self, agent_id: str) -> None:
         """Delete the entire list for this agent."""

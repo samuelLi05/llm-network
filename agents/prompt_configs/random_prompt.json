@@ -300,10 +300,10 @@
   ], 
 
   "fixed_templates": [
-    "I am a social media user who is completely opposed to the {statement}", 
-    "I am a social media user who is skeptical of the {statement}", 
-    "I am a social media user who is neutral about the {statement}", 
-    "I am a social media user who tends to agree with the {statement}", 
-    "I am a social media user who strongly believes in the {statement}"
+    "I am a social media user who is completely opposed to the statement, {statement}", 
+    "I am a social media user who is skeptical of the statement, {statement}", 
+    "I am a social media user who is neutral about the statement, {statement}", 
+    "I am a social media user who tends to agree with the statement, {statement}", 
+    "I am a social media user who strongly believes in the statement, {statement}"
   ]
 }

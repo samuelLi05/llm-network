@@ -17,9 +17,11 @@ class EmbeddedPost:
     text: str
     created_at: float
     embedding_model: str
+    score_model: str
     # Stored as float32 ndarray in memory for fast math.
     # When persisted to Redis, we serialize to a JSON-compatible list[float].
     vector: np.ndarray
+    score_vector: np.ndarray
     topic_similarity: float
     stance_score: float
     strength: float
@@ -106,6 +108,9 @@ class RollingEmbeddingStore:
         vec = payload.get("vector")
         if isinstance(vec, np.ndarray):
             payload["vector"] = vec.astype(np.float32, copy=False).tolist()
+        score_vec = payload.get("score_vector")
+        if isinstance(score_vec, np.ndarray):
+            payload["score_vector"] = score_vec.astype(np.float32, copy=False).tolist()
         return payload
 
     @staticmethod
@@ -140,13 +145,16 @@ class RollingEmbeddingStore:
             raise RuntimeError("Failed to embed text")
 
         post_id = id or metadata.get("message_id") or f"{int(created_at * 1000)}"
+        score_vec = embedded.get("score_vector") or embedded.get("vector")
         item = EmbeddedPost(
             id=str(post_id),
             topic=self.topic,
             text=text,
             created_at=created_at,
             embedding_model=embedded["model"],
+            score_model=str(embedded.get("score_model") or embedded.get("model") or ""),
             vector=to_np(embedded["vector"], dtype=np.float32),
+            score_vector=to_np(score_vec, dtype=np.float32),
             topic_similarity=float(embedded["topic_similarity"]),
             stance_score=float(embedded["stance_score"]),
             strength=float(embedded["strength"]),
@@ -171,6 +179,7 @@ class RollingEmbeddingStore:
         id: str,
         text: str,
         vector: list[float] | np.ndarray,
+        score_vector: Optional[list[float] | np.ndarray] = None,
         scored: dict[str, Any],
         created_at: Optional[float] = None,
         metadata: Optional[dict[str, Any]] = None,
@@ -183,14 +192,17 @@ class RollingEmbeddingStore:
         """
         created_at = float(created_at if created_at is not None else time.time())
         metadata = metadata or {}
+        score_vec = score_vector if score_vector is not None else scored.get("score_vector") or vector
 
         item = EmbeddedPost(
             id=str(id),
             topic=self.topic,
             text=text,
             created_at=created_at,
-            embedding_model=str(scored.get("model") or self.analyzer.embedding_model),
+            embedding_model=str(scored.get("model") or getattr(self.analyzer, "semantic_embedding_model", "")),
+            score_model=str(scored.get("score_model") or scored.get("model") or getattr(self.analyzer, "score_embedding_model", "")),
             vector=to_np(vector, dtype=np.float32),
+            score_vector=to_np(score_vec, dtype=np.float32),
             topic_similarity=float(scored["topic_similarity"]),
             stance_score=float(scored["stance_score"]),
             strength=float(scored["strength"]),
@@ -222,6 +234,12 @@ class RollingEmbeddingStore:
                 data = json.loads(raw)
                 if isinstance(data.get("vector"), list):
                     data["vector"] = to_np(data["vector"], dtype=np.float32)
+                if isinstance(data.get("score_vector"), list):
+                    data["score_vector"] = to_np(data["score_vector"], dtype=np.float32)
+                elif "score_vector" not in data:
+                    data["score_vector"] = data.get("vector")
+                if "score_model" not in data:
+                    data["score_model"] = data.get("embedding_model") or ""
                 items.append(EmbeddedPost(**data))
             except Exception:
                 continue
@@ -254,7 +272,9 @@ class RollingEmbeddingStore:
             text=query_text,
             created_at=time.time(),
             embedding_model=embedded["model"],
+            score_model=str(embedded.get("score_model") or embedded.get("model") or ""),
             vector=to_np(embedded["vector"], dtype=np.float32),
+            score_vector=to_np(embedded.get("score_vector") or embedded["vector"], dtype=np.float32),
             topic_similarity=float(embedded["topic_similarity"]),
             stance_score=float(embedded["stance_score"]),
             strength=float(embedded["strength"]),
@@ -359,8 +379,10 @@ class RollingEmbeddingStore:
             topic=self.topic,
             text="",
             created_at=time.time(),
-            embedding_model=self.analyzer.embedding_model,
+            embedding_model=str(getattr(self.analyzer, "semantic_embedding_model", "")),
+            score_model=str(getattr(self.analyzer, "score_embedding_model", "")),
             vector=to_np(agent_vector, dtype=np.float32),
+            score_vector=to_np(agent_vector, dtype=np.float32),
             topic_similarity=1.0,
             stance_score=float(agent_stance_score),
             strength=float(agent_strength),

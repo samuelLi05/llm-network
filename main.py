@@ -37,9 +37,15 @@ STANCE_BATCH_SIZE = 5
 STANCE_BATCH_INTERVAL = 30
 
 # Embedding configuration
-USE_OPENAI_EMBEDDINGS = False
+# If True: use stance-aware SBERT for topic/stance/strength scoring, while still
+# preferring OpenAI embeddings for cosine similarity between vectors.
+# If False: use OpenAI embeddings for both semantic vectors and scoring.
+USE_LOCAL_EMBEDDING_MODEL = True
 
-# When USE_OPENAI_EMBEDDINGS=False, embeddings are computed locally via SentenceTransformers.
+# How to score stance/topic/strength from social-media-style posts.
+# Options: "heading" (first line), "weighted" (softmax-weighted mean over spans), "best_span" (single best span), "full" (full post)
+SCORE_SPAN_MODE = "heading"
+
 LOCAL_EMBEDDING_MODEL = "all-mpnet-base-v2"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 
@@ -164,8 +170,9 @@ async def main():
     if ENABLE_EMBEDDING_CONTEXT:
         analyzer = EmbeddingAnalyzer(
             BASELINE_STATEMENT if USE_BASELINE_STATEMENT else topic,
-            use_openai_embeddings=USE_OPENAI_EMBEDDINGS,
+            use_local_embedding_model=USE_LOCAL_EMBEDDING_MODEL,
             use_baseline_statement=USE_BASELINE_STATEMENT,
+            score_span_mode=SCORE_SPAN_MODE,
             openai_embedding_model=OPENAI_EMBEDDING_MODEL,
             local_embedding_model=LOCAL_EMBEDDING_MODEL,
         )
@@ -223,7 +230,7 @@ async def main():
             redis=message_cache.redis,
             window_size=PROFILE_WINDOW_SIZE,
             seed_weight=PROFILE_SEED_WEIGHT,
-            use_openai_embeddings=USE_OPENAI_EMBEDDINGS,
+            use_local_embedding_model=USE_LOCAL_EMBEDDING_MODEL,
             use_baseline_statement=USE_BASELINE_STATEMENT,
             openai_embedding_model=OPENAI_EMBEDDING_MODEL,
             local_embedding_model=LOCAL_EMBEDDING_MODEL,
@@ -233,7 +240,7 @@ async def main():
             profile_store=profile_store,
             redis_cache=topology_cache,
             redis_key=f"snapshot:{topic}",
-            use_openai_embeddings=USE_OPENAI_EMBEDDINGS,
+            use_local_embedding_model=USE_LOCAL_EMBEDDING_MODEL,
             use_baseline_statement=USE_BASELINE_STATEMENT,
             openai_embedding_model=OPENAI_EMBEDDING_MODEL,
             local_embedding_model=LOCAL_EMBEDDING_MODEL,

@@ -29,7 +29,7 @@ class NetworkTopologyTracker:
         redis_key: Optional[str] = None,
         min_edge_similarity: float = 0.15,
         update_interval_s: float = 10.0,
-        use_openai_embeddings: bool = True,
+        use_local_embedding_model: bool = False,
         use_baseline_statement: bool = False,
         openai_embedding_model: str = "text-embedding-3-small",
         local_embedding_model: str = "all-mpnet-base-v2S",
@@ -43,7 +43,7 @@ class NetworkTopologyTracker:
 
         self._analyzer = EmbeddingAnalyzer(
             topic,
-            use_openai_embeddings=bool(use_openai_embeddings),
+            use_local_embedding_model=bool(use_local_embedding_model),
             use_baseline_statement=bool(use_baseline_statement),
             openai_embedding_model=openai_embedding_model,
             local_embedding_model=local_embedding_model,
@@ -75,9 +75,10 @@ class NetworkTopologyTracker:
 
         nodes: list[dict[str, Any]] = []
         for i, agent_id in enumerate(present_ids):
-            scored = await self._analyzer.score_vector(mat[i].tolist(), include_vector=False)
-            scored = scored or {}
             p = profile_by_id.get(agent_id)
+            vec_for_scoring = getattr(p, "score_vector", None) or mat[i].tolist()
+            scored = await self._analyzer.score_vector(vec_for_scoring, include_vector=False)
+            scored = scored or {}
             nodes.append(
                 {
                     "agent_id": agent_id,

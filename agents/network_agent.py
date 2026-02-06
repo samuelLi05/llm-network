@@ -3,6 +3,7 @@ import asyncio
 import difflib
 import json
 import re
+import hashlib
 from typing import Optional, TYPE_CHECKING
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -63,7 +64,10 @@ class NetworkAgent:
         self.stream_name = stream_name
         self.stream_group = stream_group
         self.seed = seed
-        self.consumer_name = f"{self.stream_group}-consumer" if self.stream_group else None
+        # IMPORTANT: consumer_name must be unique per consumer in a group. If multiple
+        # agents share the same name, Redis treats them as the same consumer which
+        # can lead to odd delivery/ordering behavior.
+        self.consumer_name = f"{self.stream_group}-{self.id}-consumer" if self.stream_group else None
         self.is_consuming = asyncio.Event()
 
         # Controller integrations
@@ -94,6 +98,15 @@ class NetworkAgent:
         self.regen_max_attempts = 2
         self.regen_similarity_threshold = 0.86
         self.regen_history_last_n = 6
+
+        # Global anti-repetition guard (across ALL agents). This is critical when stream
+        # processing is fully async and multiple agents can generate concurrently.
+        self.global_regen_on_repeat = True
+        self.global_regen_max_attempts = 3
+        self.global_regen_similarity_threshold = 0.90
+        self.global_regen_history_last_n = 40
+        self.global_dedupe_ttl_s = int(os.getenv("GLOBAL_DEDUPE_TTL_S", "180"))
+        self._pending_publish_fingerprint: Optional[str] = None
 
         self._authoritative_sentence = self._extract_authoritative_sentence(self.init_prompt)
 
@@ -126,6 +139,68 @@ class NetworkAgent:
         text = re.sub(r"\s+", " ", text).strip()
         return text
 
+    @staticmethod
+    def _extract_heading(text: str) -> str:
+        """Extract the first line for stance/topic/strength scoring.
+
+        This reduces noise from hashtags, long threads, and rhetorical tails.
+        """
+        t = (text or "").strip()
+        if not t:
+            return ""
+        head = (t.splitlines()[0] or "").strip()
+        return head or t
+
+    async def _select_score_text_and_vec(self, text: str) -> tuple[str, Optional[list[float]]]:
+        """Choose a robust score span for volatile social posts.
+
+        Prefer an embedder-selected sentence/span when possible; fall back to
+        the first line.
+        """
+        analyzer = getattr(self.rolling_store, "analyzer", None) if self.rolling_store else None
+        if analyzer is None:
+            head = self._extract_heading(text)
+            return head, None
+
+        try:
+            mode = str(getattr(analyzer, "score_span_mode", "heading") or "heading").strip().lower()
+
+            if mode == "full":
+                # Score the entire post as-is.
+                t = (text or "").strip()
+                return (t or self._extract_heading(text)), None
+
+            if mode == "weighted":
+                agg = await analyzer.aggregate_score_vector(
+                    text,
+                    max_spans=10,
+                    stance_weight=float(getattr(analyzer, "score_span_stance_weight", 0.25)),
+                    temperature=float(getattr(analyzer, "score_span_temperature", 0.05)),
+                    min_topic_similarity=float(getattr(analyzer, "score_span_min_topic_similarity", 0.10)),
+                )
+                if agg:
+                    # Text is only used for metadata; the vector is what matters.
+                    return self._extract_heading(text), agg
+
+            if mode == "best_span":
+                span, vec = await analyzer.select_best_score_span(
+                    text,
+                    max_spans=10,
+                    stance_weight=float(getattr(analyzer, "score_span_stance_weight", 0.25)),
+                )
+                span = (span or "").strip()
+                if span and vec:
+                    return span, vec
+
+            # Default: score the first line.
+            head = self._extract_heading(text)
+            return head, None
+        except Exception:
+            pass
+
+        head = self._extract_heading(text)
+        return head, None
+
     @classmethod
     def _similarity_ratio(cls, a: str, b: str) -> float:
         a_n = cls._normalize_for_similarity(a)
@@ -138,9 +213,94 @@ class NetworkAgent:
     def _extract_cached_content(item) -> str:
         if item is None:
             return ""
+        if isinstance(item, (bytes, bytearray)):
+            try:
+                item = item.decode("utf-8", errors="ignore")
+            except Exception:
+                item = str(item)
         if isinstance(item, dict):
             return str(item.get("content") or item.get("text") or item)
+        # Common case: RedisCache stores JSON strings of dicts.
+        if isinstance(item, str):
+            s = item.strip()
+            if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+                try:
+                    parsed = json.loads(s)
+                    if isinstance(parsed, dict):
+                        return str(parsed.get("content") or parsed.get("text") or parsed)
+                except Exception:
+                    pass
+            return s
         return str(item)
+
+    @classmethod
+    def _fingerprint_text(cls, text: str) -> str:
+        norm = cls._normalize_for_similarity(text)
+        return hashlib.sha256(norm.encode("utf-8", errors="ignore")).hexdigest()
+
+    async def _apply_global_repeat_guard(self, response: str, messages: list[dict]) -> str:
+        """Ensure the candidate response isn't too similar to recent cross-agent posts.
+
+        Uses two layers:
+        1) Lexical similarity check against recent global cache entries.
+        2) Atomic Redis fingerprint reservation to prevent concurrent identical publishes.
+        """
+        if not (self.global_regen_on_repeat and self.message_cache):
+            return response
+
+        # Always clear any previous pending reservation.
+        self._pending_publish_fingerprint = None
+
+        regen_rule = (
+            "Rewrite your post to be substantially different from recent posts across the whole network. "
+            "Change the opening line and overall structure. Avoid the same cadence, slogans, and line breaks. "
+            "Do not reuse the same hashtags or call-to-action phrasing."
+        )
+
+        # Pull global recent history once per attempt (cheap) and compare.
+        for attempt in range(self.global_regen_max_attempts + 1):
+            try:
+                recent_items = await self.message_cache.get_last_responses(self.global_regen_history_last_n)
+            except Exception:
+                recent_items = []
+
+            recent_texts = [self._extract_cached_content(it) for it in (recent_items or [])]
+            best = 0.0
+            for prev in recent_texts:
+                best = max(best, self._similarity_ratio(response, prev))
+
+            # Reserve fingerprint to prevent simultaneous identical publishes.
+            fp = self._fingerprint_text(response)
+            reserved = True
+            try:
+                reserved = await self.message_cache.reserve_fingerprint(fp, ttl_s=self.global_dedupe_ttl_s)
+            except Exception:
+                reserved = True
+
+            if best < self.global_regen_similarity_threshold and reserved:
+                self._pending_publish_fingerprint = fp
+                return response
+
+            if self.log_recommendations:
+                reason = []
+                if best >= self.global_regen_similarity_threshold:
+                    reason.append(f"similarity={best:.2f}")
+                if not reserved:
+                    reason.append("fingerprint_collision")
+                reason_s = ",".join(reason) if reason else "unknown"
+                console_logger.info(
+                    f"Agent {self.id} global regen triggered: {reason_s} threshold={self.global_regen_similarity_threshold:.2f}"
+                )
+
+            # If we couldn't reserve (someone else published the same thing) or it's too similar, regenerate.
+            if attempt >= self.global_regen_max_attempts:
+                # Fail open: publish as-is if we exhaust attempts.
+                return response
+
+            regen_messages = messages + [{"role": "system", "content": regen_rule}]
+            response = await self._generate_from_messages(regen_messages)
+
+        return response
 
     async def _generate_from_messages(self, messages: list[dict]) -> str:
         if not self.local_llm and not self.llm_service:
@@ -278,6 +438,17 @@ class NetworkAgent:
         async with self._publish_lock:
             message_data = {'sender_id': self.id, 'content': message}
 
+            # Last-chance idempotency: if generate_response reserved a fingerprint, keep it.
+            # If it didn't, attempt to reserve now (fail open if Redis is unavailable).
+            if self.message_cache and self.global_regen_on_repeat:
+                try:
+                    fp = self._pending_publish_fingerprint or self._fingerprint_text(message)
+                    ok = await self.message_cache.reserve_fingerprint(fp, ttl_s=self.global_dedupe_ttl_s)
+                    if ok:
+                        self._pending_publish_fingerprint = fp
+                except Exception:
+                    pass
+
             # Designate the next responder BEFORE publishing the message
             if self.order_manager:
                 next_responder = await self.order_manager.select_and_store_next_responder(exclude_agent_id=self.id)
@@ -285,6 +456,9 @@ class NetworkAgent:
 
             # Now publish the message (other agents will see the designated responder)
             message_id = await self.stream_client.publish_message(self.stream_name, message_data)
+
+        # Clear reservation marker after publish attempt.
+        self._pending_publish_fingerprint = None
 
         # Append to RedisCache (per-agent message history)
         if self.message_cache:
@@ -302,8 +476,14 @@ class NetworkAgent:
             # Score the published message so logs include the same stance/topic features used elsewhere.
             if self.rolling_store and getattr(self.rolling_store, "analyzer", None):
                 try:
+                    score_text, score_vec = await self._select_score_text_and_vec(message)
                     scored = await asyncio.wait_for(
-                        self.rolling_store.analyzer.embed_and_score(message, include_vector=False),
+                        self.rolling_store.analyzer.embed_and_score(
+                            message,
+                            include_vector=False,
+                            score_text=score_text,
+                            precomputed_score_vector=score_vec,
+                        ),
                         timeout=float(os.getenv("PUBLISH_SCORE_TIMEOUT_S", "10")),
                     )
                 except Exception:
@@ -433,7 +613,11 @@ class NetworkAgent:
                             break
                         best = min(best, cand_best) if cand_best < best else cand_best
 
+            # Global guard: prevent cross-agent convergence on identical templates when
+            # stream processing is fully async.
+            response = await self._apply_global_repeat_guard(response, messages)
             return response
+            
         except asyncio.TimeoutError:
             console_logger.error(f"Timed out generating response for agent {self.id} (Redis/OpenAI timeout).")
             return "I'm sorry, I timed out while generating a response."
@@ -620,7 +804,14 @@ class NetworkAgent:
             # Embed+score once, then index everywhere.
             if self.log_reco_debug:
                 console_logger.info(f"Agent {self.id} ingest start: message_id={message_id}")
-            embedded = await self.rolling_store.analyzer.embed_and_score(content, include_vector=True)
+            score_text, score_vec = await self._select_score_text_and_vec(content)
+            embedded = await self.rolling_store.analyzer.embed_and_score(
+                content,
+                include_vector=True,
+                semantic_text=content,
+                score_text=score_text,
+                precomputed_score_vector=score_vec,
+            )
             if embedded is None or "vector" not in embedded:
                 console_logger.info(f"Agent {self.id} ingest failed: embed_and_score returned None")
                 return
@@ -629,6 +820,7 @@ class NetworkAgent:
                 id=str(message_id),
                 text=content,
                 vector=embedded["vector"],
+                score_vector=embedded.get("score_vector"),
                 scored=embedded,
                 created_at=None,
                 metadata={"sender_id": self.id, "message_id": str(message_id)},
@@ -638,6 +830,7 @@ class NetworkAgent:
             await self.profile_store.add_interaction_vector(
                 self.id,
                 vector=embedded["vector"],
+                score_vector=embedded.get("score_vector"),
                 interaction_type="authored",
                 ts=None,
                 metadata={"message_id": str(message_id)},
@@ -682,7 +875,14 @@ class NetworkAgent:
                     console_logger.info(
                         f"Agent {self.id} consume cold-index: message_id={message_id} sender_id={sender_id}"
                     )
-                embedded = await self.rolling_store.analyzer.embed_and_score(content, include_vector=True)
+                score_text, score_vec = await self._select_score_text_and_vec(content)
+                embedded = await self.rolling_store.analyzer.embed_and_score(
+                    content,
+                    include_vector=True,
+                    semantic_text=content,
+                    score_text=score_text,
+                    precomputed_score_vector=score_vec,
+                )
                 if embedded is None or "vector" not in embedded:
                     console_logger.info(f"Agent {self.id} consume failed: embed_and_score returned None")
                     return
@@ -690,6 +890,7 @@ class NetworkAgent:
                     id=str(message_id),
                     text=content,
                     vector=embedded["vector"],
+                    score_vector=embedded.get("score_vector"),
                     scored=embedded,
                     created_at=None,
                     metadata={"sender_id": sender_id, "message_id": str(message_id)},
@@ -699,6 +900,7 @@ class NetworkAgent:
             await self.profile_store.add_interaction_vector(
                 self.id,
                 vector=item.vector,
+                score_vector=getattr(item, "score_vector", None),
                 interaction_type="consumed",
                 ts=None,
                 metadata={"message_id": str(message_id), "sender_id": sender_id},

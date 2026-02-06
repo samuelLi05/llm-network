@@ -30,7 +30,15 @@ class AgentProfile:
     sum_vector: list[float]
     window: list[dict[str, Any]]  # each: {"vector": [...], "weight": float, "type": str, "ts": float}
 
+    # --- Optional / backwards-compatible fields (must come after non-defaults) ---
+    score_embedding_model: str = ""
+
+    # Normalized mean vector in the scoring model space (used for stance/topic/strength scoring).
+    score_vector: Optional[list[float]] = None
+    score_sum_vector: Optional[list[float]] = None
+
     seed_vector: Optional[list[float]] = None
+    score_seed_vector: Optional[list[float]] = None
 
 
 class AgentProfileStore:
@@ -52,7 +60,7 @@ class AgentProfileStore:
         authored_weight: float = 1.0,
         consumed_weight: float = 0.7,
         key_prefix: str = "agent_profile:",
-        use_openai_embeddings: bool = True,
+        use_local_embedding_model: bool = False,
         use_baseline_statement: bool = False,
         openai_embedding_model: str = "text-embedding-3-small",
         local_embedding_model: str = "all-mpnet-base-v2",
@@ -66,7 +74,7 @@ class AgentProfileStore:
         self._mem: dict[str, AgentProfile] = {}
 
         # Embedding backend configuration (controlled by main.py)
-        self.use_openai_embeddings = bool(use_openai_embeddings)
+        self.use_local_embedding_model = bool(use_local_embedding_model)
         self.use_baseline_statement = bool(use_baseline_statement)
         self.openai_embedding_model = str(openai_embedding_model)
         self.local_embedding_model = str(local_embedding_model)
@@ -74,7 +82,7 @@ class AgentProfileStore:
     def _make_analyzer(self, topic: str) -> EmbeddingAnalyzer:
         return EmbeddingAnalyzer(
             topic,
-            use_openai_embeddings=self.use_openai_embeddings,
+            use_local_embedding_model=self.use_local_embedding_model,
             use_baseline_statement=self.use_baseline_statement,
             openai_embedding_model=self.openai_embedding_model,
             local_embedding_model=self.local_embedding_model,
@@ -107,7 +115,14 @@ class AgentProfileStore:
 
         # Convert any ndarrays to lists for JSON.
         payload = asdict(profile)
-        for k in ("vector", "sum_vector", "seed_vector"):
+        for k in (
+            "vector",
+            "sum_vector",
+            "seed_vector",
+            "score_vector",
+            "score_sum_vector",
+            "score_seed_vector",
+        ):
             v = payload.get(k)
             if isinstance(v, np.ndarray):
                 payload[k] = v.astype(np.float32, copy=False).tolist()
@@ -116,6 +131,9 @@ class AgentProfileStore:
             vec = item.get("vector")
             if isinstance(vec, np.ndarray):
                 item["vector"] = vec.astype(np.float32, copy=False).tolist()
+            svec = item.get("score_vector")
+            if isinstance(svec, np.ndarray):
+                item["score_vector"] = svec.astype(np.float32, copy=False).tolist()
 
         await self.redis.set(self._key(profile.agent_id), json.dumps(payload, ensure_ascii=False))
 
@@ -142,12 +160,15 @@ class AgentProfileStore:
 
         seed_vec = seed["vector"]
         seed_vec_np = to_np(seed_vec, dtype=np.float32)
+        seed_score_vec = seed.get("score_vector") or seed_vec
+        seed_score_vec_np = to_np(seed_score_vec, dtype=np.float32)
         dim = len(seed_vec)
 
         created = time.time()
         profile = AgentProfile(
             agent_id=agent_id,
             embedding_model=seed["model"],
+            score_embedding_model=str(seed.get("score_model") or seed.get("model") or ""),
             window_size=self.window_size,
             seed_weight=self.seed_weight,
             authored_weight=self.authored_weight,
@@ -155,13 +176,18 @@ class AgentProfileStore:
             created_at=created,
             updated_at=created,
             vector=seed_vec_np,
+            score_vector=seed_score_vec_np,
             total_weight=0.0,
             sum_vector=to_np(self._zeros(dim), dtype=np.float32),
+            score_sum_vector=to_np(self._zeros(len(seed_score_vec_np)), dtype=np.float32),
             window=[],
             seed_vector=seed_vec_np,
+            score_seed_vector=seed_score_vec_np,
         )
         # Ensure the stored vector is normalized
         profile.vector = l2_normalize_np(profile.vector)
+        if profile.score_vector is not None:
+            profile.score_vector = l2_normalize_np(profile.score_vector)
         await self.save(profile)
         return profile
 
@@ -170,6 +196,7 @@ class AgentProfileStore:
         agent_id: str,
         *,
         vector: list[float] | np.ndarray,
+        score_vector: Optional[list[float] | np.ndarray] = None,
         interaction_type: str,
         ts: Optional[float] = None,
         metadata: Optional[dict[str, Any]] = None,
@@ -191,15 +218,19 @@ class AgentProfileStore:
 
         weight = profile.authored_weight if interaction_type == "authored" else profile.consumed_weight
         vec_np = to_np(vector, dtype=np.float32)
+        score_vec_np = to_np(score_vector if score_vector is not None else vector, dtype=np.float32)
 
         # Initialize sum_vector if needed
         if profile.sum_vector is None or (isinstance(profile.sum_vector, list) and len(profile.sum_vector) == 0):
             profile.sum_vector = to_np(self._zeros(len(vec_np)), dtype=np.float32)
+        if profile.score_sum_vector is None or (isinstance(profile.score_sum_vector, list) and len(profile.score_sum_vector) == 0):
+            profile.score_sum_vector = to_np(self._zeros(len(score_vec_np)), dtype=np.float32)
 
         # Append to window
         profile.window.append(
             {
                 "vector": vec_np,
+                "score_vector": score_vec_np,
                 "weight": float(weight),
                 "type": interaction_type,
                 "ts": ts,
@@ -207,15 +238,19 @@ class AgentProfileStore:
             }
         )
         profile.sum_vector = add_scaled_np(profile.sum_vector, vec_np, float(weight))
+        profile.score_sum_vector = add_scaled_np(profile.score_sum_vector, score_vec_np, float(weight))
         profile.total_weight += float(weight)
 
         # Enforce sliding window
         while len(profile.window) > profile.window_size:
             old = profile.window.pop(0)
             old_vec = old.get("vector")
+            old_score_vec = old.get("score_vector")
             old_w = float(old.get("weight", 1.0))
             if old_vec is not None:
                 profile.sum_vector = sub_scaled_np(profile.sum_vector, old_vec, old_w)
+            if old_score_vec is not None and profile.score_sum_vector is not None:
+                profile.score_sum_vector = sub_scaled_np(profile.score_sum_vector, old_score_vec, old_w)
                 profile.total_weight -= old_w
 
         # Compute final agent vector = normalize(seed_weight*seed_vec + sum_vector)
@@ -224,6 +259,11 @@ class AgentProfileStore:
             combined = add_scaled_np(combined, profile.seed_vector, float(profile.seed_weight))
 
         profile.vector = l2_normalize_np(combined)
+
+        score_combined = to_np(profile.score_sum_vector if profile.score_sum_vector is not None else profile.sum_vector, dtype=np.float32)
+        if profile.score_seed_vector is not None and profile.seed_weight > 0:
+            score_combined = add_scaled_np(score_combined, profile.score_seed_vector, float(profile.seed_weight))
+        profile.score_vector = l2_normalize_np(score_combined)
         profile.updated_at = time.time()
 
         await self.save(profile)
@@ -260,6 +300,7 @@ class AgentProfileStore:
         return await self.add_interaction_vector(
             agent_id,
             vector=embedded["vector"],
+            score_vector=embedded.get("score_vector"),
             interaction_type=interaction_type,
             ts=ts,
             metadata=metadata,
@@ -272,7 +313,8 @@ class AgentProfileStore:
             return None
 
         analyzer = self._make_analyzer(topic)
-        scored = await analyzer.score_vector(profile.vector)
+        vec_for_scoring = profile.score_vector if profile.score_vector is not None else profile.vector
+        scored = await analyzer.score_vector(vec_for_scoring)
         if scored is None:
             return None
 
