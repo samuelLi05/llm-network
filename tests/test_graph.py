@@ -156,7 +156,6 @@ def visualize_graph(cg, agents, group_of):
     plt.title(title)
     plt.axis('off')
     plt.tight_layout()
-    plt.savefig('/home/sammli/llm-network/tests/community_graph.png', dpi=150)
     plt.show()
 
 if __name__ == "__main__":
