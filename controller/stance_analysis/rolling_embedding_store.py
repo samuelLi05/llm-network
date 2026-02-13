@@ -1,5 +1,6 @@
 import json
 import time
+import random
 from dataclasses import dataclass, asdict
 from typing import Any, Optional
 
@@ -369,6 +370,7 @@ class RollingEmbeddingStore:
         alpha: float = 1.0,
         beta: float = 0.5,
         gamma: float = 1.0,
+        diversity_prob: float = 0.5,
     ) -> list[dict[str, Any]]:
         """Rank stored posts for an agent using the same composite distance.
 
@@ -424,6 +426,21 @@ class RollingEmbeddingStore:
         qv = query.vector.astype(np.float32, copy=False)
         dots = self._matrix @ qv
 
+        k = min(int(top_k), int(mask.sum()))
+
+        # For disagreement: get larger sample using semantic similarity only
+        large_distances = (1.0 - dots)
+        large_distances = np.where(mask, large_distances, np.inf)
+        large_k = min(int(top_k) * 3, int(mask.sum()))
+        large_idx = np.argpartition(large_distances, kth=large_k - 1)[:large_k]
+        large_idx = large_idx[np.argsort(large_distances[large_idx])]
+
+        # Filter for most disagreeing in strength and stance (top k by combined deltas)
+        strength_deltas = np.abs(self._strength - float(query.strength))
+        stance_deltas = np.abs(self._stance - float(query.stance_score))
+        disagreement_candidates = sorted(large_idx, key=lambda i: float(alpha) * stance_deltas[i] + float(beta) * strength_deltas[i], reverse=True)[:k]
+        disagreement_idx = disagreement_candidates
+
         distances = (
             float(alpha) * np.abs(self._stance - float(query.stance_score))
             + float(beta) * np.abs(self._strength - float(query.strength))
@@ -431,25 +448,55 @@ class RollingEmbeddingStore:
         )
         distances = np.where(mask, distances, np.inf)
 
-        k = min(int(top_k), int(mask.sum()))
         idx = np.argpartition(distances, kth=k - 1)[:k]
         idx = idx[np.argsort(distances[idx])]
 
+        agreement_distances = distances
+        agreement_idx = idx
+
+        # Selection with diversity
+        selected = []  # list of (idx, mode)
+        used_ids = set()
+        for _ in range(k):
+            if random.random() < diversity_prob:
+                mode = "disagreement"
+                idx_list = disagreement_idx
+            else:
+                mode = "agreement"
+                idx_list = agreement_idx
+            for j in range(len(idx_list)):
+                idx = idx_list[j]
+                if self._items[idx].id not in used_ids:
+                    selected.append((idx, mode))
+                    used_ids.add(self._items[idx].id)
+                    break
+
         results: list[dict[str, Any]] = []
-        for i in idx.tolist():
-            item = self._items[i]
-            stance_delta = float(abs(float(self._stance[i]) - float(query.stance_score)))
-            strength_delta = float(abs(float(self._strength[i]) - float(query.strength)))
-            semantic_sim = float(dots[i])
+        for idx, mode in selected:
+            item = self._items[idx]
+            stance_delta = float(abs(float(self._stance[idx]) - float(query.stance_score)))
+            strength_delta = float(abs(float(self._strength[idx]) - float(query.strength)))
+            semantic_sim = float(dots[idx])
+            if mode == "agreement":
+                stance_term = float(alpha) * stance_delta
+                strength_term = float(beta) * strength_delta
+                semantic_term = float(gamma) * (1.0 - semantic_sim)
+                distance = stance_term + strength_term + semantic_term
+            else:
+                stance_term = float(alpha) * stance_delta
+                strength_term = float(beta) * strength_delta
+                semantic_term = float(gamma) * (1.0 - semantic_sim)
+                distance = stance_term + strength_term + semantic_term
             results.append(
                 {
-                    "distance": float(distances[i]),
+                    "distance": distance,
                     "semantic_similarity": semantic_sim,
                     "stance_delta": stance_delta,
                     "strength_delta": strength_delta,
-                    "stance_term": float(alpha) * stance_delta,
-                    "strength_term": float(beta) * strength_delta,
+                    "stance_term": stance_term,
+                    "strength_term": strength_term,
                     "semantic_term": float(gamma) * (1.0 - semantic_sim),
+                    "mode": mode,
                     "id": item.id,
                     "created_at": item.created_at,
                     "text": item.text,

@@ -746,7 +746,7 @@ class NetworkAgent:
             except Exception as exc:
                 console_logger.info(f"Agent {self.id} recommendation context failed (fallback): {exc}")
 
-        # Fallback: original cache behavior
+        # Fallback: original cache behavior, get last N messages per each agent
         if not self.message_cache:
             meta = {"source": "empty", "reason": "no_message_cache"}
             if self.log_recommendations:
