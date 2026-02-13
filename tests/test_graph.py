@@ -16,10 +16,8 @@ def test_graph_construction():
     cg = ConnectionGraph(
         agents,
         seed=42,
-        directed=True,
         graph_type="community",
         avg_degree_target=6.0,  # density knob (not an exact constraint)
-        base_social_needs=2.0,
         base_in_social_needs=0.5,
         base_out_social_needs=2.0,
         lognormal_mu=1.0,
@@ -37,7 +35,7 @@ def test_graph_construction():
         min_in_degree=1,
     )
     
-    graph = cg.get_graph()  # out-neighbors when directed=True
+    graph = cg.get_graph()  # out-neighbors
     in_weights = getattr(cg, "node_in_weights", {})
     out_weights = getattr(cg, "node_out_weights", {})
     group_of = getattr(cg, "_group_of", {})
