@@ -371,6 +371,7 @@ class RollingEmbeddingStore:
         beta: float = 0.5,
         gamma: float = 1.0,
         diversity_prob: float = 0.5,
+        recency_weight: float = 0.1,
     ) -> list[dict[str, Any]]:
         """Rank stored posts for an agent using the same composite distance.
 
@@ -427,6 +428,10 @@ class RollingEmbeddingStore:
         if not bool(mask.any()):
             return []
 
+        # Prepare recency data if needed
+        indices = np.array([item.metadata.get("index", 0) for item in self._items])
+        max_index = np.max(indices) if indices.size > 0 else 1.0
+
         # If we have enough non-seed items to fill top_k, drop seeds.
         if seed_mask is not None:
             non_seed_count = int((mask & (~seed_mask)).sum())
@@ -448,7 +453,7 @@ class RollingEmbeddingStore:
         # Filter for most disagreeing in strength and stance (top k by combined deltas)
         strength_deltas = np.abs(self._strength - float(query.strength))
         stance_deltas = np.abs(self._stance - float(query.stance_score))
-        disagreement_candidates = sorted(large_idx, key=lambda i: float(alpha) * stance_deltas[i] + float(beta) * strength_deltas[i], reverse=True)[:k]
+        disagreement_candidates = sorted(large_idx, key=lambda i: float(alpha) * stance_deltas[i] + float(beta) * strength_deltas[i] + (recency_weight * indices[i] / max_index if recency_weight > 0.0 else 0), reverse=True)[:k]
         disagreement_idx = disagreement_candidates
 
         distances = (
@@ -457,6 +462,11 @@ class RollingEmbeddingStore:
             + float(gamma) * (1.0 - dots)
         )
         distances = np.where(mask, distances, np.inf)
+
+        # Apply recency boost: newer posts (higher index) get lower distance
+        if recency_weight > 0.0:
+            recency_scores = indices / max_index
+            distances -= recency_weight * recency_scores
 
         idx = np.argpartition(distances, kth=k - 1)[:k]
         idx = idx[np.argsort(distances[idx])]

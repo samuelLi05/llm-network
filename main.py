@@ -5,12 +5,9 @@ TimeManager, OrderManager, RedisCache, and Logger for coordinated messaging.
 """
 
 import asyncio
-import faulthandler
+
 import os
 import random
-import sys
-import threading
-import traceback
 import time
 from agents.network_agent import NetworkAgent
 from agents.llm_service import LLMService
@@ -48,7 +45,7 @@ USE_LOCAL_EMBEDDING_MODEL = True
 
 # How to score stance/topic/strength from social-media-style posts.
 # Options: "heading" (first line), "weighted" (softmax-weighted mean over spans), "best_span" (single best span), "full" (full post)
-SCORE_SPAN_MODE = "heading"
+SCORE_SPAN_MODE = "full"
 
 LOCAL_EMBEDDING_MODEL = "all-mpnet-base-v2"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
@@ -157,80 +154,6 @@ async def main():
 
     # Initialize TimeManager with 3-second global interval
     time_manager = TimeManager(global_interval=3.0)
-
-    # Optional watchdog: if publishes stop for long enough, dump stacks.
-    # Enable with WATCHDOG_INACTIVITY_S=45 (seconds), etc.
-    watchdog_stop: threading.Event | None = None
-    watchdog_inactivity_s = float(os.getenv("WATCHDOG_INACTIVITY_S", "0"))
-    if watchdog_inactivity_s > 0:
-        faulthandler.enable()
-
-        loop = asyncio.get_running_loop()
-
-        watchdog_interval_s = float(os.getenv("WATCHDOG_POLL_S", "5"))
-        watchdog_once = os.getenv("WATCHDOG_ONCE", "1") != "0"
-        watchdog_verbose = os.getenv("WATCHDOG_VERBOSE", "0") == "1"
-        watchdog_task_limit = int(os.getenv("WATCHDOG_TASKS_LIMIT", "25"))
-
-        watchdog_stop = threading.Event()
-
-        console_logger.info(
-            f"WATCHDOG enabled: inactivity={watchdog_inactivity_s:.1f}s poll={watchdog_interval_s:.1f}s once={watchdog_once}"
-        )
-
-        def _dump_asyncio_tasks() -> None:
-            try:
-                tasks = list(asyncio.all_tasks(loop))
-            except Exception as exc:
-                console_logger.error(f"WATCHDOG: failed to list asyncio tasks: {exc}")
-                return
-
-            console_logger.error(f"WATCHDOG: asyncio task dump (count={len(tasks)})")
-            for i, task in enumerate(tasks[: max(0, watchdog_task_limit)]):
-                try:
-                    coro = task.get_coro()
-                except Exception:
-                    coro = None
-                console_logger.error(f"WATCHDOG: task[{i}] done={task.done()} coro={coro}")
-                try:
-                    stack = task.get_stack(limit=8)
-                except Exception:
-                    stack = []
-                for frame in stack:
-                    for line in traceback.format_stack(frame, limit=8):
-                        sys.stderr.write(line)
-                if stack:
-                    sys.stderr.write("\n")
-
-        def _watchdog() -> None:
-            while not watchdog_stop.is_set():
-                time.sleep(max(0.5, watchdog_interval_s))
-                try:
-                    # Don't alert until at least one publish happened.
-                    if not time_manager.last_publish:
-                        continue
-                    idle_s = float(time_manager.time_since_last_global_publish())
-                except Exception:
-                    continue
-                if watchdog_verbose:
-                    console_logger.debug(f"WATCHDOG poll: idle_s={idle_s:.2f}")
-                if idle_s >= watchdog_inactivity_s:
-                    console_logger.error(
-                        f"WATCHDOG: no publishes for {idle_s:.1f}s (>= {watchdog_inactivity_s:.1f}s) -> dumping stacks"
-                    )
-                    try:
-                        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
-                    except Exception:
-                        pass
-                    try:
-                        loop.call_soon_threadsafe(_dump_asyncio_tasks)
-                    except Exception:
-                        pass
-                    if watchdog_once:
-                        return
-
-        threading.Thread(target=_watchdog, daemon=True, name="PublishWatchdog").start()
-
     # Initialize RedisCache for storing agent message histories
     message_cache = RedisCache(host=REDIS_HOST, port=REDIS_PORT)
 
@@ -505,10 +428,6 @@ async def main():
             console_logger.info(f"Error stopping agent {agent.id}: {e}")
 
     await logger.async_stop()
-
-    if watchdog_stop is not None:
-        watchdog_stop.set()
-
     if topo_task:
         topo_task.cancel()
         try:

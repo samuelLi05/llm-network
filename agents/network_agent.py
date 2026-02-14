@@ -707,6 +707,7 @@ class NetworkAgent:
                             top_k=self.context_top_k,
                             exclude_sender_id=self.id,
                             allowed_sender_ids=allowed_sender_ids,
+                            recency_weight=0.1,
                         )
 
                         if not recos:
