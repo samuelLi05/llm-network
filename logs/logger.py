@@ -1,5 +1,6 @@
 import os
 import asyncio
+import json
 import queue
 import time
 import logging
@@ -66,7 +67,7 @@ class Logger:
 
     def _log_worker(self):
         """Worker that writes queued items to the log file."""
-        with open(self.file_path, 'a') as f:
+        with open(self.file_path, 'a', encoding='utf-8') as f:
             while not self._stop_event.is_set():
                 try:
                     item = self.log_queue.get(timeout=1)
@@ -74,18 +75,17 @@ class Logger:
                         break
                 except queue.Empty:
                     continue
-                timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                f.write(f"[{timestamp}] {item}\n")
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
                 f.flush()
 
-    def log_publish(self, agent_id: str, message: str) -> None:
-        """Synchronously queue an agent publish event for logging."""
-        self.log_queue.put(f"PUBLISH agent={agent_id} | {message}")
+    def log_publish(self, log_data: dict) -> None:
+        """Synchronously queue a log data dict for JSONL logging."""
+        self.log_queue.put(log_data)
 
-    async def async_log_publish(self, agent_id: str, message: str) -> None:
-        """Asynchronously queue an agent publish event for logging."""
+    async def async_log_publish(self, log_data: dict) -> None:
+        """Asynchronously queue a log data dict for JSONL logging."""
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self.log_publish, agent_id, message)
+        await loop.run_in_executor(None, self.log_publish, log_data)
 
     async def async_put(self, item: Any) -> None:
         """Awaitable put: pushes item into the thread-safe queue using executor."""

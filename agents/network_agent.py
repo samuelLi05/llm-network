@@ -4,6 +4,7 @@ import difflib
 import json
 import re
 import hashlib
+import time
 from typing import Optional, TYPE_CHECKING
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -34,6 +35,8 @@ class NetworkAgent:
     Integrates with TimeManager for rate limiting, OrderManager for turn selection,
     RedisCache for message history, and Logger for publish event logging.
     """
+
+    message_index = 0  # Global message index counter
 
     def __init__(
         self,
@@ -380,31 +383,30 @@ class NetworkAgent:
                 await asyncio.sleep(0.1)
                 continue
 
-            # Neighbor-based routing: ignore messages from non-neighbors.
-            if self.order_manager and hasattr(self.order_manager, "get_neighbors"):
+            # Check if this agent is the designated responder (OrderManager logic).
+            if self.order_manager:
+                if not await asyncio.to_thread(self.order_manager.is_my_turn, self.id):
+                    # Not our turn, skip responding
+                    # designated = await asyncio.to_thread(self.order_manager.get_designated_responder)
+                    continue
+                # Clear the designation since we're responding
+                await asyncio.to_thread(self.order_manager.clear_designated_responder)
+
+            # Neighbor-based routing: with turn-taking enabled, neighbor restrictions
+            if self.order_manager and hasattr(self.order_manager, "get_neighbors") and self.order_manager.ordering_mode == "topology":
                 try:
-                    neighbors = self.order_manager.get_neighbors(self.id)
+                    sender_neighbors = await asyncio.to_thread(self.order_manager.get_neighbors, sender_id)
                 except Exception:
-                    neighbors = None
-                if neighbors:
-                    if sender_id not in set(neighbors):
-                        await asyncio.sleep(0.05)
-                        continue
+                    sender_neighbors = None
+                if sender_neighbors and self.id not in set(sender_neighbors):
+                    console_logger.info(
+                        f"Agent {self.id} responding despite neighbor mismatch: sender={sender_id}"
+                    )
 
             # console_logger.info(f"Agent {self.id} received message {message_id}: {message_data}")
             incoming_post = message_data.get('content', '')
             if not incoming_post:
                 continue
-
-            # Check if this agent is the designated responder (OrderManager logic)
-            if self.order_manager:
-                if not self.order_manager.is_my_turn(self.id):
-                    # Not our turn, skip responding
-                    designated = self.order_manager.get_designated_responder()
-                    # console_logger.info(f"Agent {self.id} skipped (designated responder is {designated}).")
-                    continue
-                # Clear the designation since we're responding
-                self.order_manager.clear_designated_responder()
 
             # Update this agent's profile with the consumed message (fast-path: use stored vector)
             try:
@@ -457,6 +459,21 @@ class NetworkAgent:
             # Now publish the message (other agents will see the designated responder)
             message_id = await self.stream_client.publish_message(self.stream_name, message_data)
 
+            # Assign global message index (monotonic within this process)
+            NetworkAgent.message_index += 1
+            message_index = NetworkAgent.message_index
+
+            # Store index mapping in Redis (use existing async redis client; fail open)
+            if self.message_cache:
+                try:
+                    key = self.message_cache._key(f"msg_index:{str(message_id)}")
+                    await asyncio.wait_for(
+                        self.message_cache.redis.set(key, str(message_index)),
+                        timeout=float(os.getenv("REDIS_KV_TIMEOUT_S", "1.5")),
+                    )
+                except Exception:
+                    pass
+
         # Clear reservation marker after publish attempt.
         self._pending_publish_fingerprint = None
 
@@ -466,12 +483,11 @@ class NetworkAgent:
 
         # Index into rolling embedding store + update authored profile (off the critical path)
         if self.rolling_store and self.profile_store and self.topic:
-            asyncio.create_task(self._on_published_message(str(message_id), message))
+            asyncio.create_task(self._on_published_message(str(message_id), message, message_index))
 
         # Log the publish event
         if self.logger:
-            log_message = message
-            metrics: dict = {"sender_id": self.id, "message_id": str(message_id)}
+            metrics: dict = {"sender_id": self.id, "message_id": str(message_id), "index": int(message_index)}
 
             # Score the published message so logs include the same stance/topic features used elsewhere.
             if self.rolling_store and getattr(self.rolling_store, "analyzer", None):
@@ -512,13 +528,20 @@ class NetworkAgent:
             #         "items": items[: int(os.getenv("LOG_FEED_ITEMS", "3"))],
             #     }
 
-            if len(metrics) > 1:
-                try:
-                    log_message = f"{message} | metrics={json.dumps(metrics, ensure_ascii=False, separators=(',', ':'))}"
-                except Exception:
-                    log_message = message
+            # Include a compact summary of the last feed used for generation.
+            fm = self._last_feed_meta if isinstance(self._last_feed_meta, dict) else None
+            if fm and isinstance(fm.get("used_indices"), list):
+                metrics["used_indices"] = fm.get("used_indices")
 
-            await self.logger.async_log_publish(self.id, log_message)
+            log_data = {
+                self.id: {
+                    "message": message,
+                    "metrics": metrics,
+                    "recommendation_indices": metrics.get("used_indices", []),
+                },
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+            }
+            await self.logger.async_log_publish(log_data)
 
             console_logger.debug(f"Agent {self.id} published message.")
 
@@ -671,7 +694,7 @@ class NetworkAgent:
                         allowed_sender_ids = None
                         if self.order_manager and hasattr(self.order_manager, "get_neighbors"):
                             try:
-                                neigh = self.order_manager.get_neighbors(self.id)
+                                neigh = await asyncio.to_thread(self.order_manager.get_neighbors, self.id)
                             except Exception:
                                 neigh = None
                             if neigh:
@@ -710,6 +733,7 @@ class NetworkAgent:
                                     "items": [
                                         {
                                             "id": r.get("id"),
+                                            "index": (r.get("index") if r.get("index") is not None else (r.get("metadata") or {}).get("index")),
                                             "distance": r.get("distance"),
                                             "semantic_similarity": r.get("semantic_similarity"),
                                             "semantic_term": r.get("semantic_term"),
@@ -722,6 +746,47 @@ class NetworkAgent:
                                         for r in recos[: max(1, self.log_reco_max_items)]
                                     ],
                                 }
+
+                                # used_indices: prefer embedded indices; fall back to Redis mapping when missing.
+                                used: list[int] = []
+                                missing_ids: list[str] = []
+                                for r in recos:
+                                    idx_val = r.get("index")
+                                    if idx_val is None and isinstance(r.get("metadata"), dict):
+                                        idx_val = (r.get("metadata") or {}).get("index")
+                                    if idx_val is None:
+                                        rid = r.get("id")
+                                        if rid:
+                                            missing_ids.append(str(rid))
+                                        continue
+                                    try:
+                                        used.append(int(idx_val))
+                                    except Exception:
+                                        pass
+
+                                if missing_ids and self.message_cache:
+                                    try:
+                                        keys = [self.message_cache._key(f"msg_index:{rid}") for rid in missing_ids]
+                                        raw_vals = await asyncio.wait_for(
+                                            self.message_cache.redis.mget(keys),
+                                            timeout=float(os.getenv("REDIS_KV_TIMEOUT_S", "1.5")),
+                                        )
+                                        for v in raw_vals or []:
+                                            if v is None:
+                                                continue
+                                            if isinstance(v, (bytes, bytearray)):
+                                                try:
+                                                    v = v.decode("utf-8", errors="ignore")
+                                                except Exception:
+                                                    v = str(v)
+                                            try:
+                                                used.append(int(str(v).strip()))
+                                            except Exception:
+                                                continue
+                                    except Exception:
+                                        pass
+
+                                meta["used_indices"] = used
 
                                 # Debug/validation: ensure neighbor filtering is actually applied.
                                 if allowed_sender_ids is not None:
@@ -783,7 +848,7 @@ class NetworkAgent:
             console_logger.info(f"Agent {self.id} using cache feed: {meta}")
         return "\n".join(parts), meta
 
-    async def _on_published_message(self, message_id: str, content: str) -> None:
+    async def _on_published_message(self, message_id: str, content: str, message_index: int) -> None:
         if not (self.rolling_store and self.profile_store and self.topic):
             return
 
@@ -801,31 +866,40 @@ class NetworkAgent:
                 if self.log_reco_debug:
                     console_logger.info(f"Agent {self.id} ingest skip (already indexed): {message_id}")
                 return
-            # Embed+score once, then index everywhere.
-            if self.log_reco_debug:
-                console_logger.info(f"Agent {self.id} ingest start: message_id={message_id}")
-            score_text, score_vec = await self._select_score_text_and_vec(content)
-            embedded = await self.rolling_store.analyzer.embed_and_score(
-                content,
-                include_vector=True,
-                semantic_text=content,
-                score_text=score_text,
-                precomputed_score_vector=score_vec,
-            )
-            if embedded is None or "vector" not in embedded:
-                console_logger.info(f"Agent {self.id} ingest failed: embed_and_score returned None")
-                return
 
-            await self.rolling_store.add_scored_vector(
-                id=str(message_id),
-                text=content,
-                vector=embedded["vector"],
-                score_vector=embedded.get("score_vector"),
-                scored=embedded,
-                created_at=None,
-                metadata={"sender_id": self.id, "message_id": str(message_id)},
-                persist=True,
+        if self.log_reco_debug:
+            console_logger.info(f"Agent {self.id} ingest start: message_id={message_id}")
+
+        score_text, score_vec = await self._select_score_text_and_vec(content)
+        try:
+            embedded = await asyncio.wait_for(
+                self.rolling_store.analyzer.embed_and_score(
+                    content,
+                    include_vector=True,
+                    semantic_text=content,
+                    score_text=score_text,
+                    precomputed_score_vector=score_vec,
+                ),
+                timeout=float(os.getenv("INGEST_EMBED_TIMEOUT_S", "20")),
             )
+        except Exception:
+            embedded = None
+        if embedded is None or "vector" not in embedded:
+            console_logger.info(f"Agent {self.id} ingest failed: embed_and_score returned None")
+            return
+
+        async with lock:
+            if self.rolling_store.get_by_id(str(message_id)) is None:
+                await self.rolling_store.add_scored_vector(
+                    id=str(message_id),
+                    text=content,
+                    vector=embedded["vector"],
+                    score_vector=embedded.get("score_vector"),
+                    scored=embedded,
+                    created_at=None,
+                    metadata={"sender_id": self.id, "message_id": str(message_id), "index": int(message_index)},
+                    persist=True,
+                )
 
             await self.profile_store.add_interaction_vector(
                 self.id,
@@ -869,34 +943,46 @@ class NetworkAgent:
 
         async with lock:
             item = self.rolling_store.get_by_id(str(message_id))
-            if item is None:
-                # Rare race/cold start: embed+index so the profile update can still happen.
-                if self.log_reco_debug:
-                    console_logger.info(
-                        f"Agent {self.id} consume cold-index: message_id={message_id} sender_id={sender_id}"
-                    )
-                score_text, score_vec = await self._select_score_text_and_vec(content)
-                embedded = await self.rolling_store.analyzer.embed_and_score(
-                    content,
-                    include_vector=True,
-                    semantic_text=content,
-                    score_text=score_text,
-                    precomputed_score_vector=score_vec,
-                )
-                if embedded is None or "vector" not in embedded:
-                    console_logger.info(f"Agent {self.id} consume failed: embed_and_score returned None")
-                    return
-                item = await self.rolling_store.add_scored_vector(
-                    id=str(message_id),
-                    text=content,
-                    vector=embedded["vector"],
-                    score_vector=embedded.get("score_vector"),
-                    scored=embedded,
-                    created_at=None,
-                    metadata={"sender_id": sender_id, "message_id": str(message_id)},
-                    persist=True,
-                )
 
+        if item is None:
+            # Rare race/cold start: embed+index so the profile update can still happen.
+            if self.log_reco_debug:
+                console_logger.info(
+                    f"Agent {self.id} consume cold-index: message_id={message_id} sender_id={sender_id}"
+                )
+            score_text, score_vec = await self._select_score_text_and_vec(content)
+            try:
+                embedded = await asyncio.wait_for(
+                    self.rolling_store.analyzer.embed_and_score(
+                        content,
+                        include_vector=True,
+                        semantic_text=content,
+                        score_text=score_text,
+                        precomputed_score_vector=score_vec,
+                    ),
+                    timeout=float(os.getenv("CONSUME_EMBED_TIMEOUT_S", "20")),
+                )
+            except Exception:
+                embedded = None
+            if embedded is None or "vector" not in embedded:
+                console_logger.info(f"Agent {self.id} consume failed: embed_and_score returned None")
+                return
+
+            async with lock:
+                item = self.rolling_store.get_by_id(str(message_id))
+                if item is None:
+                    item = await self.rolling_store.add_scored_vector(
+                        id=str(message_id),
+                        text=content,
+                        vector=embedded["vector"],
+                        score_vector=embedded.get("score_vector"),
+                        scored=embedded,
+                        created_at=None,
+                        metadata={"sender_id": sender_id, "message_id": str(message_id)},
+                        persist=True,
+                    )
+
+        async with lock:
             await self.profile_store.add_interaction_vector(
                 self.id,
                 vector=item.vector,

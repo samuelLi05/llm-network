@@ -4,6 +4,8 @@ import json
 import random
 import time
 import hashlib
+import asyncio
+import os
 
 """Asynchronous Redis-based cache for storing and retrieving agent responses based on agent id."""
 class RedisCache:
@@ -15,6 +17,9 @@ class RedisCache:
 
     def _key(self, key: str) -> str:
         return f"{self.prefix}{key}"
+
+    def _timeout_s(self) -> float:
+        return float(os.getenv("REDIS_OP_TIMEOUT_S", "1.5"))
     
     async def get_responses(self, agent_id: str, last_n: Optional[int] = None) -> List[Any]:
         """
@@ -22,12 +27,15 @@ class RedisCache:
         Returns a list of strings (JSON strings for structured items).
         """
         key = self._key(agent_id)
-        if last_n is None:
-            items = await self.redis.lrange(key, 0, -1)
-        else:
-            # fetch last `last_n` items
-            items = await self.redis.lrange(key, -last_n, -1)
-        return items or []
+        try:
+            if last_n is None:
+                items = await asyncio.wait_for(self.redis.lrange(key, 0, -1), timeout=self._timeout_s())
+            else:
+                # fetch last `last_n` items
+                items = await asyncio.wait_for(self.redis.lrange(key, -last_n, -1), timeout=self._timeout_s())
+            return items or []
+        except Exception:
+            return []
     
     async def get_random_responses(self, sample_size: int) -> List[Any]:
         """Retrieve a random sample of responses across all agents in the cache."""
@@ -35,9 +43,18 @@ class RedisCache:
         pattern = f"{self.prefix}*"
         all_items = []
         while cursor:
-            cursor, keys = await self.redis.scan(cursor=cursor, match=pattern, count=100)
+            try:
+                cursor, keys = await asyncio.wait_for(
+                    self.redis.scan(cursor=cursor, match=pattern, count=100),
+                    timeout=self._timeout_s(),
+                )
+            except Exception:
+                break
             for key in keys:
-                items = await self.redis.lrange(key, 0, -1)
+                try:
+                    items = await asyncio.wait_for(self.redis.lrange(key, 0, -1), timeout=self._timeout_s())
+                except Exception:
+                    items = []
                 all_items.extend(items)
         if len(all_items) <= sample_size:
             return all_items
@@ -45,8 +62,14 @@ class RedisCache:
     
     async def get_last_responses(self, sample_size:int) -> List[Any]:
         """Retrieve the last `sample_size` responses added across all agents in the cache based on their publish timestamp."""
-        entries = await self.redis.zrevrange(self.ordered_set_key, 0, sample_size - 1)
-        return entries
+        try:
+            entries = await asyncio.wait_for(
+                self.redis.zrevrange(self.ordered_set_key, 0, sample_size - 1),
+                timeout=self._timeout_s(),
+            )
+            return entries
+        except Exception:
+            return []
     
     async def append_response(self, agent_id:str, value: Any, expire: Optional[int] = None):
         key = self._key(agent_id)
@@ -56,13 +79,25 @@ class RedisCache:
         else:
             payload = str(value)
         # Add to key based list
-        await self.redis.rpush(key, payload)
+        try:
+            await asyncio.wait_for(self.redis.rpush(key, payload), timeout=self._timeout_s())
+        except Exception:
+            return
         # add Redis sorted set entry for timestamp ordering using current time as score
         timestamp = time.time()
-        await self.redis.zadd(self.ordered_set_key, {payload: timestamp})
+        try:
+            await asyncio.wait_for(
+                self.redis.zadd(self.ordered_set_key, {payload: timestamp}),
+                timeout=self._timeout_s(),
+            )
+        except Exception:
+            return
 
         if expire is not None:
-            await self.redis.expire(key, expire)
+            try:
+                await asyncio.wait_for(self.redis.expire(key, expire), timeout=self._timeout_s())
+            except Exception:
+                return
 
     @staticmethod
     def normalize_for_fingerprint(text: str) -> str:
@@ -93,7 +128,10 @@ class RedisCache:
         key = f"{self._dedupe_prefix}{fp}"
         try:
             # SET key 1 NX EX ttl
-            ok = await self.redis.set(key, "1", ex=int(ttl_s), nx=True)
+            ok = await asyncio.wait_for(
+                self.redis.set(key, "1", ex=int(ttl_s), nx=True),
+                timeout=self._timeout_s(),
+            )
             return bool(ok)
         except Exception:
             # If Redis is unavailable, fail open (do not block publishing).
@@ -105,22 +143,34 @@ class RedisCache:
             return
         key = f"{self._dedupe_prefix}{fp}"
         try:
-            await self.redis.delete(key)
+            await asyncio.wait_for(self.redis.delete(key), timeout=self._timeout_s())
         except Exception:
             return
 
     async def clear(self, agent_id: str) -> None:
         """Delete the entire list for this agent."""
-        await self.redis.delete(self._key(agent_id))
+        try:
+            await asyncio.wait_for(self.redis.delete(self._key(agent_id)), timeout=self._timeout_s())
+        except Exception:
+            return
 
     async def clear_all(self) -> None:
         """Delete all keys with the current prefix."""
         cursor = b'0'
         pattern = f"{self.prefix}*"
         while cursor:
-            cursor, keys = await self.redis.scan(cursor=cursor, match=pattern, count=100)
+            try:
+                cursor, keys = await asyncio.wait_for(
+                    self.redis.scan(cursor=cursor, match=pattern, count=100),
+                    timeout=self._timeout_s(),
+                )
+            except Exception:
+                break
             if keys:
-                await self.redis.delete(*keys)
+                try:
+                    await asyncio.wait_for(self.redis.delete(*keys), timeout=self._timeout_s())
+                except Exception:
+                    return
 
     async def close(self) -> None:
         await self.redis.close()

@@ -254,8 +254,8 @@ class RollingEmbeddingStore:
         query_text: str,
         *,
         top_k: int = 10,
-        min_topic_similarity: float = 0.15,
-        min_strength: float = 0.05,
+        min_topic_similarity: float = 0.0,
+        min_strength: float = 0.0,
         allowed_sender_ids: Optional[list[str]] = None,
         exclude_sender_id: Optional[str] = None,
         alpha: float = 1.0,
@@ -363,8 +363,8 @@ class RollingEmbeddingStore:
         agent_stance_score: float,
         agent_strength: float,
         top_k: int = 10,
-        min_topic_similarity: float = 0.15,
-        min_strength: float = 0.05,
+        min_topic_similarity: float = 0.0,
+        min_strength: float = 0.0,
         allowed_sender_ids: Optional[list[str]] = None,
         exclude_sender_id: Optional[str] = None,
         alpha: float = 1.0,
@@ -401,9 +401,13 @@ class RollingEmbeddingStore:
 
         mask = (self._topic_sim >= float(min_topic_similarity)) & (self._strength >= float(min_strength))
 
+        # Prefer real posts over seed/anchor prompts when possible.
+        seed_mask = None
+        if self._sender_ids is not None:
+            seed_mask = np.asarray([sid == "__seed__" for sid in self._sender_ids], dtype=bool)
+
         if allowed_sender_ids is not None and self._sender_ids is not None:
             allowed = set(str(x) for x in allowed_sender_ids)
-            allowed.add("__seed__")
             sender_mask = np.asarray(
                 [
                     (sid is not None and str(sid) in allowed)
@@ -422,6 +426,12 @@ class RollingEmbeddingStore:
 
         if not bool(mask.any()):
             return []
+
+        # If we have enough non-seed items to fill top_k, drop seeds.
+        if seed_mask is not None:
+            non_seed_count = int((mask & (~seed_mask)).sum())
+            if non_seed_count >= int(top_k):
+                mask = mask & (~seed_mask)
 
         qv = query.vector.astype(np.float32, copy=False)
         dots = self._matrix @ qv
@@ -504,6 +514,7 @@ class RollingEmbeddingStore:
                     "stance_score": item.stance_score,
                     "strength": item.strength,
                     "metadata": item.metadata,
+                    "index": (item.metadata.get("index") if isinstance(item.metadata, dict) else None),
                 }
             )
         return results

@@ -3,6 +3,7 @@ import os
 import time
 import json
 from typing import List, Optional
+import asyncio
 
 from agents.network_agent import NetworkAgent
 from controller.stance_analysis.agent_profile_store import AgentProfileStore
@@ -347,13 +348,8 @@ class OrderManager:
                 candidate_agent_ids=candidate_agent_ids,
             )
         else:
-            if candidate_agent_ids is None:
-                next_agent_id = self.get_random_agent(exclude_agent_id=exclude_agent_id)
-            else:
-                candidates = [a for a in self.agents if a.id in candidate_agent_ids and a.id != exclude_agent_id]
-                if not candidates:
-                    candidates = [a for a in self.agents if a.id != exclude_agent_id]
-                next_agent_id = random.choice(candidates).id
+            next_agent_id = self.get_random_agent(exclude_agent_id=exclude_agent_id)
+            
 
         # Store in Redis so all agents see the same value
         self.stream_client.redis.set(NEXT_RESPONDER_KEY, next_agent_id)

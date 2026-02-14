@@ -64,44 +64,31 @@ class NetworkTopologyTracker:
 
         if not profiles:
             return {
-                "topic": self.topic,
-                "timestamp": time.time(),
-                "nodes": [],
-                "edges": [],
+                "tp": self.topic,
+                "ts": time.time(),
+                "n": {},
             }
 
         mat = np.stack(profiles).astype(np.float32, copy=False)
-        sims = mat @ mat.T  # (N,N) because vectors are normalized
+        # Removed sims and edges computation
 
-        nodes: list[dict[str, Any]] = []
+        nodes: dict[str, dict[str, Any]] = {}
         for i, agent_id in enumerate(present_ids):
             p = profile_by_id.get(agent_id)
             vec_for_scoring = getattr(p, "score_vector", None) or mat[i].tolist()
             scored = await self._analyzer.score_vector(vec_for_scoring, include_vector=False)
             scored = scored or {}
-            nodes.append(
-                {
-                    "agent_id": agent_id,
-                    "topic_similarity": float(scored.get("topic_similarity", 0.0)),
-                    "stance_score": float(scored.get("stance_score", 0.0)),
-                    "strength": float(scored.get("strength", 0.0)),
-                    "updated_at": float(getattr(p, "updated_at", 0.0)),
-                }
-            )
-
-        edges: list[dict[str, Any]] = []
-        n = len(present_ids)
-        for i in range(n):
-            for j in range(i + 1, n):
-                w = float(sims[i, j])
-                if w >= self.min_edge_similarity:
-                    edges.append({"source": present_ids[i], "target": present_ids[j], "weight": w})
+            nodes[agent_id] = {
+                "ts": float(scored.get("topic_similarity", 0.0)),
+                "ss": float(scored.get("stance_score", 0.0)),
+                "str": float(scored.get("strength", 0.0)),
+                "uat": float(getattr(p, "updated_at", 0.0)),
+            }
 
         return {
-            "topic": self.topic,
-            "timestamp": time.time(),
-            "nodes": nodes,
-            "edges": edges,
+            "tp": self.topic,
+            "ts": time.time(),
+            "n": nodes,
         }
 
     async def maybe_update(self, agent_ids: list[str], *, force: bool = False) -> Optional[dict[str, Any]]:
