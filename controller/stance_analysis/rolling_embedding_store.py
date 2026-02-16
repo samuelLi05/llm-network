@@ -295,8 +295,6 @@ class RollingEmbeddingStore:
 
         if allowed_sender_ids is not None and self._sender_ids is not None:
             allowed = set(str(x) for x in allowed_sender_ids)
-            # Always allow seed posts when present (useful for cold-start).
-            allowed.add("__seed__")
             sender_mask = np.asarray(
                 [
                     (sid is not None and str(sid) in allowed)
@@ -432,11 +430,9 @@ class RollingEmbeddingStore:
         indices = np.array([item.metadata.get("index", 0) for item in self._items])
         max_index = np.max(indices) if indices.size > 0 else 1.0
 
-        # If we have enough non-seed items to fill top_k, drop seeds.
+        # Always exclude seed texts from recommendations to prevent agents from being influenced by synthetic prompts.
         if seed_mask is not None:
-            non_seed_count = int((mask & (~seed_mask)).sum())
-            if non_seed_count >= int(top_k):
-                mask = mask & (~seed_mask)
+            mask = mask & (~seed_mask)
 
         qv = query.vector.astype(np.float32, copy=False)
         dots = self._matrix @ qv

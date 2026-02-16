@@ -31,7 +31,7 @@ NUM_AGENTS = 30
 STREAM_NAME = "agent_stream"
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
-RUN_DURATION_SECONDS = 1000
+RUN_DURATION_SECONDS = 3600
 USE_LOCAL_LLM = True
 ENABLE_STANCE_WORKER = False
 STANCE_BATCH_SIZE = 5
@@ -80,12 +80,17 @@ PROFILE_SEED_WEIGHT = 5.0
 TOPOLOGY_LOG_INTERVAL_S = 5.0
 
 initial_prompt_template = (
-   "You are participating in a social-media-style discussion about {topic}." \
-   "The sentence, {unique_prompt}, is your fixed stance and is authoritative and exhaustive. Write entirely from the worldview, assumptions, tone, values, and constraints it defines; it fully determines what you believe, how you speak, and what claims you are willing to make." \
-   "Produce a short, attention-grabbing post that hooks readers, makes a clear and strong claim aligned with that grounding, and invites engagement (likes, replies, shares)." \
-   "Be concise, bold, and evocative. Use a distinct memorable opening line, assertive language, and a direct call-to-action every time. Emulate authentic social media posts." \
-   "Make sure posts are distinct, do not copy formatting and language of previous posts, instead contradict any claims that oppose your fixed stance"
-   "Do not introduce outside viewpoints, neutral framing, balance, or meta-commentary. Do not soften or qualify claims unless explicitly required by the authoritative sentence. Never refer to yourself as an agent, AI, or participant in a debate."
+    "You are participating in a social-media-style discussion about {topic}. "
+    "The sentence \"{unique_prompt}\" reflects your stable perspective on this topic. "
+    "Write from this perspective consistently.\n\n"
+    
+    "Produce a short standalone post that expresses your current view. "
+    "Do not frame it as a rebuttal or direct response to anyone. "
+    "Do not quote or reference opposing claims.\n\n"
+    
+    "Be concise and write like a real person sharing a thought on their timeline. "
+    "Avoid engagement-bait call-to-actions (e.g., 'like/share/reply'), and avoid hashtag or emoji spam. "
+    "Do not refer to yourself as an agent, AI, or participant in a debate."
 )
 
 async def main():
@@ -198,24 +203,26 @@ async def main():
             # In baseline mode, keep seeds about the *topic* and refer to the
             # baseline statement as a claim (without asserting it as fact).
             if USE_BASELINE_STATEMENT:
-                seed_texts.extend(
-                    [
-                        ("pro", f"We need a calm, evidence-first conversation about {topic}."),
-                        ("pro", f"If you care about public health, take {topic} seriously and stop platforming fear."),
-                        ("anti", f"People keep repeating the claim '{BASELINE_STATEMENT}'. Either show evidence or stop spreading it."),
-                        ("anti", f"Public trust collapses when misinformation about {topic} goes unchallenged."),
-                        ("neutral", f"On {topic}, I want clear data, not vibes. What studies are people citing — if any?"),
-                    ]
-                )
+                pass
+                # seed_texts.extend(
+                #     [
+                #         ("pro", f"We need a calm, evidence-first conversation about {topic}."),
+                #         ("pro", f"If you care about public health, take {topic} seriously and stop platforming fear."),
+                #         ("anti", f"People keep repeating the claim '{BASELINE_STATEMENT}'. Either show evidence or stop spreading it."),
+                #         ("anti", f"Public trust collapses when misinformation about {topic} goes unchallenged."),
+                #         ("neutral", f"On {topic}, I want clear data, not vibes. What studies are people citing — if any?"),
+                #     ]
+                # )
             else:
-                seed_texts.extend(
-                    [
-                        ("pro", f"Enough dithering. {topic} is non-negotiable — we should expand it now."),
-                        ("pro", f"If you're against {topic}, you're choosing stagnation. Push it through."),
-                        ("anti", f"Wake up: {topic} is a harmful mistake. Stop pretending it's 'progress'."),
-                        ("anti", f"{topic} is a disaster in slow motion. Reject it before it spreads."),
-                    ]
-                )
+                pass
+                # seed_texts.extend(
+                #     [
+                #         ("pro", f"Enough dithering. {topic} is non-negotiable — we should expand it now."),
+                #         ("pro", f"If you're against {topic}, you're choosing stagnation. Push it through."),
+                #         ("anti", f"Wake up: {topic} is a harmful mistake. Stop pretending it's 'progress'."),
+                #         ("anti", f"{topic} is a disaster in slow motion. Reject it before it spreads."),
+                #     ]
+                # )
 
             for i, (side, text) in enumerate(seed_texts):
                 await rolling_store.add(
@@ -407,8 +414,7 @@ async def main():
 
     # 6. Kick off the conversation with an initial message from the first agent
     initial_message = await agents[0].generate_response(
-        "Write the first viral post that kicks off a heated comment thread about this topic. "
-        "Make a strong claim, then invite replies."
+        "Write your first social media post. Follow your fixed stance and provide reasoning. Keep it concise and natural, like a real person."
     )
     console_logger.info(f"Agent 1 starting conversation:")
     await agents[0].publish_message(initial_message)

@@ -54,7 +54,7 @@ class OrderManager:
                 pass
 
         # Ordering policy knobs (env-configurable)
-        self.ordering_mode = "topology"  # random|topology
+        self.ordering_mode = "random"  # random|topology
         self.echo_probability = 0.6
         self.fairness_tau_s = 30.0
         self.cooldown_s = 0.0

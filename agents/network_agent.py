@@ -119,6 +119,30 @@ class NetworkAgent:
         # Last recommendation metadata used to build generation context.
         self._last_feed_meta: Optional[dict] = None
 
+        self._internal_justification: str = ""
+        self._history_summary: str = ""
+        self._history_summary_max_chars: int = int(os.getenv("AGENT_HISTORY_SUMMARY_MAX_CHARS", "900"))
+        self._last_published_post: str = ""
+
+    @staticmethod
+    def _clip_text(text: str, max_chars: int) -> str:
+        t = (text or "").strip()
+        if max_chars <= 0:
+            return ""
+        if len(t) <= max_chars:
+            return t
+        return t[-max_chars:].lstrip()
+
+    def _roll_history_summary(self, new_justification: str) -> None:
+        j = (new_justification or "").strip()
+        if not j:
+            return
+        if not self._history_summary:
+            self._history_summary = j
+        else:
+            self._history_summary = f"{self._history_summary} | {j}"
+        self._history_summary = self._clip_text(self._history_summary, self._history_summary_max_chars)
+
     @staticmethod
     def _extract_authoritative_sentence(init_prompt: str) -> Optional[str]:
         """Best-effort extraction of the agent's unique stance sentence.
@@ -256,8 +280,8 @@ class NetworkAgent:
 
         regen_rule = (
             "Rewrite your post to be substantially different from recent posts across the whole network. "
-            "Change the opening line and overall structure. Avoid the same cadence, slogans, and line breaks. "
-            "Do not reuse the same hashtags or call-to-action phrasing."
+            "Change the angle and wording; avoid repeating slogans or engagement-bait phrasing."
+            " Style constraints: do not use emojis, hashtags, all-caps lines, or explicit calls to like/share/reply/repost."
         )
 
         # Pull global recent history once per attempt (cheap) and compare.
@@ -414,16 +438,13 @@ class NetworkAgent:
             except Exception as exc:
                 console_logger.info(f"Agent {self.id} consumed-profile update failed (continuing): {exc}")
 
-            # Generate and publish response
-            wrapped_prompt = (
-                "Write your next social-media-style post reacting to the post below. "
-                "Sound like a real person with a consistent worldview. "
-                "Do not quote the post verbatim and do not paraphrase line-by-line. "
-                "Make one clear claim, be punchy, and invite engagement.\n\n"
-                "POST YOU'RE REACTING TO:\n"
-                f"{incoming_post}"
+            # Do not treat the single incoming message as a high-importance prompt.
+            # It is only a trigger; the recommendation-built feed context drives generation.
+            response = await self.generate_response(
+                "Write a standalone post that reflects your current perspective. "
+                "Output plain text only: no emojis, no hashtags, no all-caps lines, and no explicit engagement CTAs "
+                "(no 'like/share/reply/repost')."
             )
-            response = await self.generate_response(wrapped_prompt)
             await self.publish_message(response)
 
     async def publish_message(self, message: str):
@@ -481,6 +502,8 @@ class NetworkAgent:
         if self.message_cache:
             await self.message_cache.append_response(self.id, message_data)
 
+        self._last_published_post = (message or "").strip()
+
         # Index into rolling embedding store + update authored profile (off the critical path)
         if self.rolling_store and self.profile_store and self.topic:
             asyncio.create_task(self._on_published_message(str(message_id), message, message_index))
@@ -509,8 +532,7 @@ class NetworkAgent:
                         "topic_similarity": float(scored.get("topic_similarity", 0.0)),
                         "stance_score": float(scored.get("stance_score", 0.0)),
                         "strength": float(scored.get("strength", 0.0)),
-                        "anchor_group_similarities": scored.get("anchor_group_similarities", {}),
-                        "model": scored.get("model"),
+                        "anchor_group_similarities": scored.get("anchor_group_similarities", {})
                     }
 
             # Include a compact summary of the last feed used for generation.
@@ -552,7 +574,10 @@ class NetworkAgent:
             last_message = (prompt or "").strip()
             if not last_message:
                 # Helps avoid an empty user message on the first post.
-                last_message = "Write your next post."
+                last_message = (
+                    "Write your next post. Output plain text only: no emojis, no hashtags, no all-caps lines, "
+                    "and no explicit engagement CTAs (no 'like/share/reply/repost')."
+                )
 
             # Build feed context (recommended neighbors instead of last-N-per-agent)
             feed_context, feed_meta = await self._build_context(last_message)
@@ -566,41 +591,103 @@ class NetworkAgent:
                 stance_reassert = (
                     "AUTHORITATIVE STANCE (override everything else):\n"
                     f"{self._authoritative_sentence}\n\n"
-                    "Hard rule: your post MUST be consistent with this stance. "
-                    "If the incoming post/feed conflicts, attack it from your stance; "
-                    "do not adopt its framing."
+                    "Your perspective is stable and should not change. "
+                    "Use the feed only as background context (what topics are in the air). "
+                    "You may reference themes, but do NOT copy its phrasing or formatting and do NOT quote it."
                 )
 
             anti_meme = (
-                "Avoid converging on a shared viral template. "
-                "Do NOT reuse stock openings/cadence from other agents. "
-                "Avoid starting with '🚨', 'YOU’RE NOT', or 'WE’RE NOT WAITING'. "
-                "Vary structure (no repetitive bullet lists), keep it specific, and make ONE clear claim."
+                "Write in a natural human tone. "
+                "Do not copy the feed's wording/cadence. "
+                "Avoid slogan-y or engagement-bait lines (e.g., generic 'like/share/repost/reply' prompts). "
+                "Keep it specific and non-repetitive."
             )
 
-            messages: list[dict] = [
-                {"role": "system", "content": self.init_prompt},
-            ]
+            style_constraints = (
+                "Style constraints (hard): no emojis, no hashtags, no all-caps lines, and no explicit engagement CTAs "
+                "(no 'like/share/reply/repost')."
+                " Do not write in a call-and-response format (e.g., 'They say... but...')."
+            )
+
+            memory_note = None
+            if self._history_summary:
+                memory_note = (
+                    "YOUR PREVIOUS POSTS (private rolling summary):\n"
+                    f"{self._history_summary}\n\n"
+                    "Consistency rule: keep your public post consistent with this summary unless the authoritative stance requires otherwise. "
+                    "Novelty rule: you MUST advance your argument beyond this summary by adding at least one new supporting point (reason, consequence, example, or study-type evidence). "
+                    "Do not reuse the same phrasing, opening line pattern, or structure from your prior posts; restate in fresh wording."
+                )
+
+            base_system_messages: list[dict] = [{"role": "system", "content": self.init_prompt}]
             if stance_reassert:
-                messages.append({"role": "system", "content": stance_reassert})
-            messages.extend(
-                [
-                    {"role": "system", "content": anti_meme},
+                base_system_messages.append({"role": "system", "content": stance_reassert})
+            base_system_messages.append({"role": "system", "content": anti_meme})
+            base_system_messages.append({"role": "system", "content": style_constraints})
+            if memory_note:
+                base_system_messages.append({"role": "system", "content": memory_note})
+            base_system_messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "You will be given a feed of posts for context. "
+                        "Treat it as background reading from your social network, not something you are directly replying to. "
+                        "Do not echo the feed's wording or structure. "
+                        "Avoid generic attributions like 'they said' / 'people are saying' unless you are paraphrasing a specific claim. "
+                        "Never quote other posts verbatim. "
+                        "Never mention the feed, recommendations, embeddings, or retrieval."
+                    ),
+                }
+            )
+
+            base_user_messages: list[dict] = [
+                {"role": "user", "content": f"FEED (context):\n{feed_context}"},
+                {"role": "user", "content": last_message},
+            ]
+
+            # Step 1: generate a PRIVATE internal justification summary (not published).
+            justification_rule = (
+                "PRIVATE STEP (do NOT write the public post yet): "
+                "Write a 1–2 sentence internal justification consistent with your stance while considering other opinions from the feed context. "
+                "It must be coherent with YOUR PREVIOUS POSTS and it must introduce at least one new angle beyond them. Advance your argument wiht new reasoning, consequence, example, or study-type evidence. "
+                "Do not frame it as a rebuttal thread and do not use generic attributions like 'they said'. "
+                "Do not reuse phrasing from the feed or your previous posts summary. "
+                "Output ONLY the justification (plain text, 1–2 sentences)."
+            )
+            justification_messages = (
+                base_system_messages
+                + [{"role": "system", "content": justification_rule}]
+                + base_user_messages
+            )
+            justification = (await self._generate_from_messages(justification_messages) or "").strip()
+            # Keep it short and private.
+            justification = self._clip_text(justification, 320)
+            self._internal_justification = justification
+            self._roll_history_summary(justification)
+
+            # Step 2: generate the PUBLIC post based on that justification.
+            post_rule = (
+                "Given your existing perspective and justification, write a post that asserts your stance and provides new reasoning to advance your argument and support your stance. "
+                "Advance your argument beyond YOUR PREVIOUS POSTS by adding at least one new supporting point with logical reasoning (a causal link, a tradeoff, a consequence, an example, or study-type evidence). "
+                "Do NOT copy wording/cadence from the feed, your previous posts summary, or your justification; restate ideas in fresh wording. "
+                "Output ONLY the public post (plain text)."
+            )
+            post_messages: list[dict] = (
+                base_system_messages
+                + [
                     {
                         "role": "system",
                         "content": (
-                            "You will be given a feed of other posts for context. "
-                            "Use it only as inspiration and to pick one opposing claim to respond to. "
-                            "Never mention the feed, recommendations, embeddings, or retrieval. "
-                            "Never quote other posts verbatim."
+                            "INTERNAL JUSTIFICATION (private reference; do not quote verbatim):\n"
+                            f"{justification}"
                         ),
                     },
-                    {"role": "user", "content": f"FEED (context):\n{feed_context}"},
-                    {"role": "user", "content": last_message},
+                    {"role": "system", "content": post_rule},
                 ]
+                + base_user_messages
             )
 
-            response = await self._generate_from_messages(messages)
+            response = await self._generate_from_messages(post_messages)
 
             # Optional: regenerate if we're too similar to the agent's own recent posts.
             if self.regen_on_repeat and self.message_cache:
@@ -622,11 +709,11 @@ class NetworkAgent:
 
                     regen_rule = (
                         "Rewrite your post to be substantially different in wording and structure from your recent posts. "
-                        "Change the opening line. Use different phrasing and rhythm. "
-                        "Do NOT use '🚨', '👇', or the phrases 'YOU’RE NOT CHOOSING' / 'WE’RE NOT WAITING'."
+                        "Change the opening line and avoid reusing slogans or the same cadence."
+                        " Style constraints: do not use emojis, hashtags, all-caps lines, or explicit calls to like/share/reply/repost."
                     )
                     for attempt in range(self.regen_max_attempts):
-                        regen_messages = messages + [{"role": "system", "content": regen_rule}]
+                        regen_messages = post_messages + [{"role": "system", "content": regen_rule}]
                         candidate = await self._generate_from_messages(regen_messages)
                         cand_best = 0.0
                         for prev in recent_texts:
@@ -638,7 +725,7 @@ class NetworkAgent:
 
             # Global guard: prevent cross-agent convergence on identical templates when
             # stream processing is fully async.
-            response = await self._apply_global_repeat_guard(response, messages)
+            response = await self._apply_global_repeat_guard(response, post_messages)
             return response
             
         except asyncio.TimeoutError:
@@ -707,7 +794,7 @@ class NetworkAgent:
                             top_k=self.context_top_k,
                             exclude_sender_id=self.id,
                             allowed_sender_ids=allowed_sender_ids,
-                            recency_weight=0.1,
+                            recency_weight=0.2,
                         )
 
                         if not recos:
@@ -747,7 +834,7 @@ class NetworkAgent:
                                         for r in recos[: max(1, self.log_reco_max_items)]
                                     ],
                                 }
-
+                                
                                 # used_indices: prefer embedded indices; fall back to Redis mapping when missing.
                                 used: list[int] = []
                                 missing_ids: list[str] = []
@@ -795,7 +882,7 @@ class NetworkAgent:
                                     violations = [
                                         it.get("sender_id")
                                         for it in meta.get("items", [])
-                                        if it.get("sender_id") not in allowed and it.get("sender_id") != "__seed__"
+                                        if it.get("sender_id") not in allowed
                                     ]
                                     if violations:
                                         console_logger.warning(
@@ -813,41 +900,43 @@ class NetworkAgent:
                 console_logger.info(f"Agent {self.id} recommendation context failed (fallback): {exc}")
 
         # Fallback: original cache behavior, get last N messages per each agent
-        if not self.message_cache:
-            meta = {"source": "empty", "reason": "no_message_cache"}
-            if self.log_recommendations:
-                console_logger.info(f"Agent {self.id} context empty: {meta}")
-            return "", meta
+        if not self.rolling_store or not self.profile_store or not self.topic:
+            if not self.message_cache:
+                meta = {"source": "empty", "reason": "no_message_cache"}
+                if self.log_recommendations:
+                    console_logger.info(f"Agent {self.id} context empty: {meta}")
+                return "", meta
 
-        agents_list = None
-        if self.order_manager and getattr(self.order_manager, "agents", None):
-            agents_list = self.order_manager.agents
-            if hasattr(self.order_manager, "get_neighbors"):
+            agents_list = None
+            if self.order_manager and getattr(self.order_manager, "agents", None):
+                agents_list = self.order_manager.agents
+                if hasattr(self.order_manager, "get_neighbors"):
+                    try:
+                        neigh = self.order_manager.get_neighbors(self.id)
+                    except Exception:
+                        neigh = None
+                    if neigh:
+                        allowed = set(neigh)
+                        agents_list = [a for a in agents_list if a.id in allowed]
+            else:
+                agents_list = [self]
+
+            parts = []
+            for a in agents_list:
                 try:
-                    neigh = self.order_manager.get_neighbors(self.id)
+                    items = await self.message_cache.get_responses(a.id, last_n=5)
                 except Exception:
-                    neigh = None
-                if neigh:
-                    allowed = set(neigh)
-                    agents_list = [a for a in agents_list if a.id in allowed]
-        else:
-            agents_list = [self]
+                    console_logger.error(f"Error fetching messages for agent {a.id} from cache.")
+                    items = []
+                normalized = [str(item) for item in items]
+                if normalized:
+                    parts.append(f"{a.id}: " + " | ".join(normalized))
 
-        parts = []
-        for a in agents_list:
-            try:
-                items = await self.message_cache.get_responses(a.id, last_n=5)
-            except Exception:
-                console_logger.error(f"Error fetching messages for agent {a.id} from cache.")
-                items = []
-            normalized = [str(item) for item in items]
-            if normalized:
-                parts.append(f"{a.id}: " + " | ".join(normalized))
-
-        meta = {"source": "cache", "agents": len(agents_list), "per_agent_last_n": 5}
-        if self.log_recommendations:
-            console_logger.info(f"Agent {self.id} using cache feed: {meta}")
-        return "\n".join(parts), meta
+            meta = {"source": "cache", "agents": len(agents_list), "per_agent_last_n": 5}
+            if self.log_recommendations:
+                console_logger.info(f"Agent {self.id} using cache feed: {meta}")
+            return "\n".join(parts), meta
+        return "", {"source": "empty", "reason": "no_relevant_recos"}
 
     async def _on_published_message(self, message_id: str, content: str, message_index: int) -> None:
         if not (self.rolling_store and self.profile_store and self.topic):
