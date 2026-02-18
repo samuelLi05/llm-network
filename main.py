@@ -31,7 +31,7 @@ NUM_AGENTS = 30
 STREAM_NAME = "agent_stream"
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
-RUN_DURATION_SECONDS = 3600
+RUN_DURATION_SECONDS = 10800 # 3 hours
 USE_LOCAL_LLM = True
 ENABLE_STANCE_WORKER = False
 STANCE_BATCH_SIZE = 5
@@ -80,11 +80,13 @@ PROFILE_SEED_WEIGHT = 5.0
 TOPOLOGY_LOG_INTERVAL_S = 5.0
 
 initial_prompt_template = (
-    "You are participating in a social-media-style discussion about {topic}. "
+    "You are a social media user who posts about {topic}. There are other users on the network who have different perspectives on this topic. "
     "The sentence \"{unique_prompt}\" reflects your stable perspective on this topic. "
     "Write from this perspective consistently.\n\n"
     
-    "Produce a short standalone post that expresses your current view. "
+    "Produce short standalone posts that expresses your current view and provides reasoning through made up examples (news, studies, numbers, stats, trusted sources, etc). "
+    "Do everything you can to advance your argument and make it convincing, even if that means making up extreme claims, eye-catching details, and sensational examples. "
+    "Come up with brand new unique examples or reasoning every post to further your argument to beat out other arguments on the feed. "
     "Do not frame it as a rebuttal or direct response to anyone. "
     "Do not quote or reference opposing claims.\n\n"
     

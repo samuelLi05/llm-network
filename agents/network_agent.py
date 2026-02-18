@@ -59,6 +59,7 @@ class NetworkAgent:
         topology_tracker: Optional[NetworkTopologyTracker] = None,
         analysis_lock: Optional[asyncio.Lock] = None,
         context_top_k: int = 8,
+        reco_system: str = "random_sampling",
     ):
         self.id = id
         self.init_prompt = init_prompt
@@ -123,6 +124,9 @@ class NetworkAgent:
         self._history_summary: str = ""
         self._history_summary_max_chars: int = int(os.getenv("AGENT_HISTORY_SUMMARY_MAX_CHARS", "900"))
         self._last_published_post: str = ""
+
+        # Type of reccomendation system
+        self.reco_system = reco_system
 
     @staticmethod
     def _clip_text(text: str, max_chars: int) -> str:
@@ -614,8 +618,8 @@ class NetworkAgent:
                 memory_note = (
                     "YOUR PREVIOUS POSTS (private rolling summary):\n"
                     f"{self._history_summary}\n\n"
-                    "Consistency rule: keep your public post consistent with this summary unless the authoritative stance requires otherwise. "
-                    "Novelty rule: you MUST advance your argument beyond this summary by adding at least one new supporting point (reason, consequence, example, or study-type evidence). "
+                    "Novelty rule: you MUST advance your argument beyond this summary by a considerable margin by adding at least one new supporting point (reason, consequence, example, or study-type evidence). "
+                    "You are encouraged to be creative and make up eye-catching details (e.g., a study, news event, example, etc) to support your argument. Make up new numbers, stats, studies, trusted sources, anecdotes to support your argument."
                     "Do not reuse the same phrasing, opening line pattern, or structure from your prior posts; restate in fresh wording."
                 )
 
@@ -631,7 +635,7 @@ class NetworkAgent:
                     "role": "system",
                     "content": (
                         "You will be given a feed of posts for context. "
-                        "Treat it as background reading from your social network, not something you are directly replying to. "
+                        "These are the other opinions on the social network you are on, you are NOT direclty replying to other posts, rather you are making new content that others on the network will consume with the goal of advancing your argument and convincing others. "
                         "Do not echo the feed's wording or structure. "
                         "Avoid generic attributions like 'they said' / 'people are saying' unless you are paraphrasing a specific claim. "
                         "Never quote other posts verbatim. "
@@ -648,11 +652,12 @@ class NetworkAgent:
             # Step 1: generate a PRIVATE internal justification summary (not published).
             justification_rule = (
                 "PRIVATE STEP (do NOT write the public post yet): "
-                "Write a 1–2 sentence internal justification consistent with your stance while considering other opinions from the feed context. "
-                "It must be coherent with YOUR PREVIOUS POSTS and it must introduce at least one new angle beyond them. Advance your argument wiht new reasoning, consequence, example, or study-type evidence. "
+                "Write a 2–3 sentence internal justification consistent with your stance while considering other opinions from the feed context. "
+                "Remember the goal is to advance your argument and convince others (you are not direclty replying to the feed but rather creating content that others on the feed consume). "
+                "With repsect to your previous posts, advance your argument with new reasoning, consequence, example, or study-type evidence. "
                 "Do not frame it as a rebuttal thread and do not use generic attributions like 'they said'. "
                 "Do not reuse phrasing from the feed or your previous posts summary. "
-                "Output ONLY the justification (plain text, 1–2 sentences)."
+                "Output ONLY the justification."
             )
             justification_messages = (
                 base_system_messages
@@ -661,16 +666,18 @@ class NetworkAgent:
             )
             justification = (await self._generate_from_messages(justification_messages) or "").strip()
             # Keep it short and private.
-            justification = self._clip_text(justification, 320)
+            justification = self._clip_text(justification, 500)
             self._internal_justification = justification
             self._roll_history_summary(justification)
 
             # Step 2: generate the PUBLIC post based on that justification.
             post_rule = (
                 "Given your existing perspective and justification, write a post that asserts your stance and provides new reasoning to advance your argument and support your stance. "
-                "Advance your argument beyond YOUR PREVIOUS POSTS by adding at least one new supporting point with logical reasoning (a causal link, a tradeoff, a consequence, an example, or study-type evidence). "
+                "Advance your argument beyond YOUR PREVIOUS POSTS by adding new supporting points"
+                "Make up any specific details you want (e.g., a study, news event, example, etc) to support your argument. This allows you to give specific exmaples, number, stats, and quantiative statements as needed. "
+                "There is no limit to what you can claim and what exmaples and resoning you provide (it can be as extreme or as mild as you want). You are encouraged make up numbers, studies, news reports, trsuted sources, and anecdotes."
                 "Do NOT copy wording/cadence from the feed, your previous posts summary, or your justification; restate ideas in fresh wording. "
-                "Output ONLY the public post (plain text)."
+                "Output ONLY the public post."
             )
             post_messages: list[dict] = (
                 base_system_messages
@@ -787,15 +794,26 @@ class NetworkAgent:
                             if neigh:
                                 allowed_sender_ids = list(neigh)
 
-                        recos = await self.rolling_store.recommend_for_agent_vector(
-                            agent_vector=profile.vector,
-                            agent_stance_score=float(view.get("stance_score", 0.0)),
-                            agent_strength=float(view.get("strength", 0.0)),
-                            top_k=self.context_top_k,
-                            exclude_sender_id=self.id,
-                            allowed_sender_ids=allowed_sender_ids,
-                            recency_weight=0.2,
-                        )
+                        if (self.reco_system == "random_sampling"):
+                            recos = await self.rolling_store.sample_from_agent_vector(
+                                agent_vector=profile.vector,
+                                agent_stance_score=float(view.get("stance_score", 0.0)),
+                                agent_strength=float(view.get("strength", 0.0)),
+                                top_k=self.context_top_k,
+                                exclude_sender_id=self.id,
+                                allowed_sender_ids=allowed_sender_ids,
+                                recency_weight=0.2
+                            )
+                        else:
+                            recos = await self.rolling_store.recommend_for_agent_vector(
+                                agent_vector=profile.vector,
+                                agent_stance_score=float(view.get("stance_score", 0.0)),
+                                agent_strength=float(view.get("strength", 0.0)),
+                                top_k=self.context_top_k,
+                                exclude_sender_id=self.id,
+                                allowed_sender_ids=allowed_sender_ids,
+                                recency_weight=0.2,
+                            )
 
                         if not recos:
                             if self.log_recommendations:

@@ -524,3 +524,114 @@ class RollingEmbeddingStore:
                 }
             )
         return results
+    
+    async def sample_from_agent_vector(
+        self,
+        *,
+        agent_vector: list[float],
+        agent_stance_score: float,
+        agent_strength: float,
+        top_k: int = 10,
+        allowed_sender_ids: Optional[list[str]] = None,
+        exclude_sender_id: Optional[str] = None,
+        alpha: float = 1.0,
+        beta: float = 0.5,
+        gamma: float = 1.0,
+        recency_weight: float = 0.1,
+    ) -> list[dict[str, Any]]:
+        """Randomly sample up to `top_k` posts from the store restricted to `allowed_sender_ids`.
+
+        Matches `recommend_for_agent_vector` output format. Supports `exclude_sender_id` (skip
+        posts authored by this sender) and applies the recency weight so newer posts are
+        slightly preferred when computing distance values.
+        """
+        if not self._items:
+            return []
+
+        # Ensure cached matrix/arrays are available
+        self._ensure_matrix()
+        if self._matrix is None or self._stance is None or self._strength is None or self._topic_sim is None:
+            return []
+
+        # Build candidate mask (exclude seeds, apply allowed_sender_ids if provided)
+        n = len(self._items)
+        candidate_mask = np.ones(n, dtype=bool)
+
+        # Exclude seed posts when present
+        if self._sender_ids is not None:
+            seed_mask = np.asarray([sid == "__seed__" for sid in self._sender_ids], dtype=bool)
+            candidate_mask = candidate_mask & (~seed_mask)
+
+            if allowed_sender_ids is not None:
+                allowed = set(str(x) for x in allowed_sender_ids)
+                sender_mask = np.asarray(
+                    [(sid is not None and str(sid) in allowed) for sid in self._sender_ids],
+                    dtype=bool,
+                )
+                candidate_mask = candidate_mask & sender_mask
+
+            if exclude_sender_id is not None:
+                exclude_mask = np.asarray([sid == exclude_sender_id for sid in self._sender_ids], dtype=bool)
+                candidate_mask = candidate_mask & (~exclude_mask)
+
+        # Collect candidate indices
+        cand_idx = np.nonzero(candidate_mask)[0].tolist()
+        if not cand_idx:
+            return []
+
+        sample_k = min(int(top_k), len(cand_idx))
+        chosen = random.sample(cand_idx, k=sample_k)
+
+        # Prepare similarity vectors for computing semantic similarity quickly
+        qv = to_np(agent_vector, dtype=np.float32)
+        dots = self._matrix @ qv
+
+        # Prepare recency data (same approach as recommend_for_agent_vector)
+        indices = np.array([item.metadata.get("index", 0) for item in self._items])
+        max_index = np.max(indices) if indices.size > 0 else 1.0
+
+        results: list[dict[str, Any]] = []
+
+        for i in chosen:
+            item = self._items[int(i)]
+            semantic_sim = float(dots[int(i)])
+            stance_delta = float(abs(float(self._stance[int(i)]) - float(agent_stance_score)))
+            strength_delta = float(abs(float(self._strength[int(i)]) - float(agent_strength)))
+            stance_term = float(alpha) * stance_delta
+            strength_term = float(beta) * strength_delta
+            semantic_term = float(gamma) * (1.0 - semantic_sim)
+
+            # Apply recency boost: newer posts (higher index) get lower distance
+            recency_boost = 0.0
+            try:
+                if recency_weight and recency_weight > 0.0:
+                    recency_boost = float(recency_weight) * (float(indices[int(i)]) / float(max_index))
+            except Exception:
+                recency_boost = 0.0
+
+            distance = stance_term + strength_term + semantic_term - recency_boost
+
+            results.append(
+                {
+                    "distance": distance,
+                    "semantic_similarity": semantic_sim,
+                    "stance_delta": stance_delta,
+                    "strength_delta": strength_delta,
+                    "stance_term": stance_term,
+                    "strength_term": strength_term,
+                    "semantic_term": semantic_term,
+                    "mode": "sample",
+                    "id": item.id,
+                    "created_at": item.created_at,
+                    "text": item.text,
+                    "topic_similarity": item.topic_similarity,
+                    "stance_score": item.stance_score,
+                    "strength": item.strength,
+                    "metadata": item.metadata,
+                    "index": (item.metadata.get("index") if isinstance(item.metadata, dict) else None),
+                }
+            )
+
+        return results
+
+
