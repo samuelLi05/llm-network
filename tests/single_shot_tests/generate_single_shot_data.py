@@ -35,12 +35,19 @@ WEIGHTS = [-1.0, -0.5, 0.0, 0.5, 1.0]
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data", "raw_text_jsonl")
 
 initial_prompt_template = (
-   "You are participating in a social-media-style discussion about {topic}." \
-   "The sentence, {unique_prompt}, is your fixed stance and is authoritative and exhaustive. Write entirely from the worldview, assumptions, tone, values, and constraints it defines; it fully determines what you believe, how you speak, and what claims you are willing to make." \
-   "Produce a short, attention-grabbing post that hooks readers, makes a clear and strong claim aligned with that grounding, and invites engagement (likes, replies, shares)." \
-   "Be concise, bold, and evocative. Use a distinct memorable opening line, assertive language, and a direct call-to-action every time. Emulate authentic social media posts." \
-   "Make sure posts are distinct, do not copy formatting and language of previous posts, instead contradict any claims that oppose your fixed stance"
-   "Do not introduce outside viewpoints, neutral framing, balance, or meta-commentary. Do not soften or qualify claims unless explicitly required by the authoritative sentence. Never refer to yourself as an agent, AI, or participant in a debate."
+    "You are a social media user who posts about {topic}. There are other users on the network who have different perspectives on this topic. "
+    "The sentence \"{unique_prompt}\" reflects your stable perspective on this topic. "
+    "Write from this perspective consistently.\n\n"
+    
+    "Produce short standalone posts that expresses your current view and provides reasoning through made up examples (news, studies, numbers, stats, trusted sources, etc). "
+    "Do everything you can to advance your argument and make it convincing, even if that means making up extreme claims, eye-catching details, and sensational examples. "
+    "Come up with brand new unique examples or reasoning every post to further your argument to beat out other arguments on the feed. "
+    "Do not frame it as a rebuttal or direct response to anyone. "
+    "Do not quote or reference opposing claims.\n\n"
+    
+    "Be concise and write like a real person sharing a thought on their timeline. "
+    "Avoid engagement-bait call-to-actions (e.g., 'like/share/reply'), and avoid hashtag or emoji spam. "
+    "Do not refer to yourself as an agent, AI, or participant in a debate."
 )
 
 

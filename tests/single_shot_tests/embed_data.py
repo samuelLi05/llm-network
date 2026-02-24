@@ -28,7 +28,7 @@ USE_LOCAL_EMBEDDING_MODEL = True
 
 # How to score output stance/topic/strength from social-media-style responses.
 # Options: "heading" (first line), "weighted" (softmax-weighted mean over spans), "best_span" (single best span), "full" (full response)
-SCORE_SPAN_MODE = "heading"
+SCORE_SPAN_MODE = "full"
 
 RAW_DATA_DIRECTORY = "tests/single_shot_tests/data/raw_text_jsonl"
 CLEANED_DATA_DIRECTORY = "tests/single_shot_tests/data/stance_converted"

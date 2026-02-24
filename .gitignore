@@ -7,3 +7,4 @@ scripts/
 old_data/
 *.jsonl
 *.log
+*.csv
