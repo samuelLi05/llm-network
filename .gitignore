@@ -8,3 +8,4 @@ old_data/
 *.jsonl
 *.log
 *.csv
+modeling/cleaned_data/
