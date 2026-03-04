@@ -462,6 +462,13 @@ class NetworkAgent:
 
     async def _do_publish(self, message: str):
         """Internal publish: designate next responder FIRST, then send to stream, cache, and log."""
+        publish_ts = None
+        if self.time_manager:
+            try:
+                publish_ts = float(self.time_manager.now_s())
+            except Exception:
+                publish_ts = None
+
         async with self._publish_lock:
             message_data = {'sender_id': self.id, 'content': message}
 
@@ -510,7 +517,7 @@ class NetworkAgent:
 
         # Index into rolling embedding store + update authored profile (off the critical path)
         if self.rolling_store and self.profile_store and self.topic:
-            asyncio.create_task(self._on_published_message(str(message_id), message, message_index))
+            asyncio.create_task(self._on_published_message(str(message_id), message, message_index, ts=publish_ts))
 
         # Log the publish event
         if self.logger:
@@ -567,6 +574,13 @@ class NetworkAgent:
                 },
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
             }
+
+            # Opinion-dynamics time: prefer TimeManager's simulated clock when available.
+            if self.time_manager:
+                try:
+                    log_data["time"] = self.time_manager.time_info()
+                except Exception:
+                    pass
             await self.logger.async_log_publish(log_data)
 
             console_logger.debug(f"Agent {self.id} published message.")
@@ -956,7 +970,7 @@ class NetworkAgent:
             return "\n".join(parts), meta
         return "", {"source": "empty", "reason": "no_relevant_recos"}
 
-    async def _on_published_message(self, message_id: str, content: str, message_index: int) -> None:
+    async def _on_published_message(self, message_id: str, content: str, message_index: int, *, ts: Optional[float] = None) -> None:
         if not (self.rolling_store and self.profile_store and self.topic):
             return
 
@@ -1014,7 +1028,7 @@ class NetworkAgent:
                 vector=embedded["vector"],
                 score_vector=embedded.get("score_vector"),
                 interaction_type="authored",
-                ts=None,
+                ts=ts,
                 metadata={"message_id": str(message_id)},
             )
 
@@ -1096,7 +1110,7 @@ class NetworkAgent:
                 vector=item.vector,
                 score_vector=getattr(item, "score_vector", None),
                 interaction_type="consumed",
-                ts=None,
+                ts=(self.time_manager.now_s() if self.time_manager else None),
                 metadata={"message_id": str(message_id), "sender_id": sender_id},
             )
 

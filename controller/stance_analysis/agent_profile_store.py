@@ -58,7 +58,7 @@ class AgentProfileStore:
         window_size: int = 200,
         seed_weight: float = 5.0,
         authored_weight: float = 1.0,
-        consumed_weight: float = 0.7,
+        consumed_weight: float = 0.0,
         key_prefix: str = "agent_profile:",
         use_local_embedding_model: bool = False,
         use_baseline_statement: bool = False,
@@ -227,19 +227,20 @@ class AgentProfileStore:
             profile.score_sum_vector = to_np(self._zeros(len(score_vec_np)), dtype=np.float32)
 
         # Append to window
-        profile.window.append(
-            {
-                "vector": vec_np,
-                "score_vector": score_vec_np,
-                "weight": float(weight),
-                "type": interaction_type,
-                "ts": ts,
-                "meta": metadata,
-            }
-        )
-        profile.sum_vector = add_scaled_np(profile.sum_vector, vec_np, float(weight))
-        profile.score_sum_vector = add_scaled_np(profile.score_sum_vector, score_vec_np, float(weight))
-        profile.total_weight += float(weight)
+        if weight > 0:
+            profile.window.append(
+                {
+                    "vector": vec_np,
+                    "score_vector": score_vec_np,
+                    "weight": float(weight),
+                    "type": interaction_type,
+                    "ts": ts,
+                    "meta": metadata,
+                }
+            )
+            profile.sum_vector = add_scaled_np(profile.sum_vector, vec_np, float(weight))
+            profile.score_sum_vector = add_scaled_np(profile.score_sum_vector, score_vec_np, float(weight))
+            profile.total_weight += float(weight)
 
         # Enforce sliding window
         while len(profile.window) > profile.window_size:

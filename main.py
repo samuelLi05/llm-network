@@ -79,6 +79,9 @@ PROFILE_SEED_WEIGHT = 5.0
 
 TOPOLOGY_LOG_INTERVAL_S = 5.0
 
+POISSON_MEAN_S = 5.0
+TIME_UNIT_MS = 1000
+
 initial_prompt_template = (
     "You are a social media user who posts about {topic}. There are other users on the network who have different perspectives on this topic. "
     "The sentence \"{unique_prompt}\" reflects your stable perspective on this topic. "
@@ -159,8 +162,13 @@ async def main():
             )
             agent_configs[agent_id] = init_prompt
 
-    # Initialize TimeManager with 3-second global interval
-    time_manager = TimeManager(global_interval=3.0)
+    # TimeManager: Poisson publish clock on a simulated timeline (starts at t=0ms).
+    time_manager = TimeManager(
+        global_interval=3.0,
+        poisson_mean=POISSON_MEAN_S,
+        time_unit_ms=TIME_UNIT_MS,
+    )
+    time_manager.mode = "poisson"
     # Initialize RedisCache for storing agent message histories
     message_cache = RedisCache(host=REDIS_HOST, port=REDIS_PORT)
 
@@ -247,6 +255,7 @@ async def main():
         topology_tracker = NetworkTopologyTracker(
             topic=topic,
             profile_store=profile_store,
+            time_manager=time_manager,
             redis_cache=topology_cache,
             redis_key=f"snapshot:{topic}",
             use_local_embedding_model=USE_LOCAL_EMBEDDING_MODEL,
@@ -341,10 +350,17 @@ async def main():
     # Persist the initial connection graph to the topology log for debugging.
     if topology_logger:
         try:
+            time_info = None
+            try:
+                time_info = time_manager.time_info() if time_manager else None
+            except Exception:
+                time_info = None
             topology_logger.log_snapshot(
                 {
                     "t": "connection_graph",
-                    "ts": time.time(),
+                    # Prefer simulated time for opinion-dynamics modeling.
+                    "ts": float(time_info.get("t_s")) if isinstance(time_info, dict) and "t_s" in time_info else time.time(),
+                    **({"time": time_info} if isinstance(time_info, dict) else {}),
                     "n": len(agent_ids),
                     "ad": float(avg_degree),
                     "g": graph,

@@ -1,5 +1,5 @@
 import time
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 import numpy as np
 
@@ -7,6 +7,9 @@ from controller.stance_analysis.agent_profile_store import AgentProfileStore
 from controller.stance_analysis.embedding_analyzer import EmbeddingAnalyzer
 from controller.stance_analysis.vector_ops import to_np
 from network.cache import RedisCache
+
+if TYPE_CHECKING:
+    from controller.time_manager import TimeManager
 
 
 class NetworkTopologyTracker:
@@ -25,6 +28,7 @@ class NetworkTopologyTracker:
         *,
         topic: str,
         profile_store: AgentProfileStore,
+        time_manager: Optional["TimeManager"] = None,
         redis_cache: Optional[RedisCache] = None,
         redis_key: Optional[str] = None,
         min_edge_similarity: float = 0.15,
@@ -36,6 +40,7 @@ class NetworkTopologyTracker:
     ):
         self.topic = topic
         self.profile_store = profile_store
+        self.time_manager = time_manager
         self.redis_cache = redis_cache
         self.redis_key = redis_key or f"topology:{topic}"
         self.min_edge_similarity = float(min_edge_similarity)
@@ -50,6 +55,22 @@ class NetworkTopologyTracker:
         )
         self._last_update_ts: float = 0.0
 
+    def _now_s(self) -> float:
+        if self.time_manager is None:
+            return time.time()
+        try:
+            return float(self.time_manager.now_s())
+        except Exception:
+            return time.time()
+
+    def _time_info(self) -> Optional[dict[str, Any]]:
+        if self.time_manager is None:
+            return None
+        try:
+            return dict(self.time_manager.time_info())
+        except Exception:
+            return None
+
     async def snapshot(self, agent_ids: list[str]) -> dict[str, Any]:
         profiles = []
         profile_by_id: dict[str, Any] = {}
@@ -63,14 +84,15 @@ class NetworkTopologyTracker:
             profiles.append(to_np(p.vector, dtype=np.float32))
 
         if not profiles:
+            info = self._time_info()
             return {
                 "tp": self.topic,
-                "ts": time.time(),
+                "ts": self._now_s(),
                 "n": {},
+                **({"time": info} if info else {}),
             }
 
         mat = np.stack(profiles).astype(np.float32, copy=False)
-        # Removed sims and edges computation
 
         nodes: dict[str, dict[str, Any]] = {}
         for i, agent_id in enumerate(present_ids):
@@ -85,14 +107,16 @@ class NetworkTopologyTracker:
                 "uat": float(getattr(p, "updated_at", 0.0)),
             }
 
+        info = self._time_info()
         return {
             "tp": self.topic,
-            "ts": time.time(),
+            "ts": self._now_s(),
             "n": nodes,
+            **({"time": info} if info else {}),
         }
 
     async def maybe_update(self, agent_ids: list[str], *, force: bool = False) -> Optional[dict[str, Any]]:
-        now = time.time()
+        now = self._now_s()
         if not force and (now - self._last_update_ts) < self.update_interval_s:
             return None
 

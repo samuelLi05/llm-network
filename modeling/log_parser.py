@@ -15,6 +15,30 @@ RUN_FILE_PATTERNS = {
 }
 
 
+def _coerce_int(v: Any) -> int | None:
+    try:
+        if v is None:
+            return None
+        return int(v)
+    except Exception:
+        return None
+
+
+def _extract_time_slice(time_meta: dict[str, Any] | None) -> int | None:
+    if not isinstance(time_meta, dict):
+        return None
+
+    ts = _coerce_int(time_meta.get("time_slice"))
+    if ts is not None:
+        return ts
+
+    t_ms = _coerce_int(time_meta.get("t_ms"))
+    unit = _coerce_int(time_meta.get("time_unit_ms"))
+    if t_ms is None or unit is None or unit <= 0:
+        return None
+    return int(t_ms // unit)
+
+
 def _extract_run_ts(file_name: str, pattern: str) -> str | None:
     match = re.match(pattern, file_name)
     if not match:
@@ -135,6 +159,18 @@ def _parse_network_file(path: Path) -> list[dict[str, Any]]:
             msg_ts = payload.get("timestamp")
             msg_epoch = _parse_datetime_to_epoch(msg_ts)
 
+            time_meta = payload.get("time") if isinstance(payload.get("time"), dict) else None
+            msg_slice = _extract_time_slice(time_meta)
+            msg_sim_s = None
+            if isinstance(time_meta, dict):
+                try:
+                    if "t_s" in time_meta:
+                        msg_sim_s = float(time_meta["t_s"])
+                    elif "t_ms" in time_meta:
+                        msg_sim_s = float(time_meta["t_ms"]) / 1000.0
+                except Exception:
+                    msg_sim_s = None
+
             metrics = entry.get("metrics", {})
             published = metrics.get("published", {})
 
@@ -143,6 +179,9 @@ def _parse_network_file(path: Path) -> list[dict[str, Any]]:
                     "sender_id": agent_id,
                     "timestamp": msg_ts,
                     "timestamp_epoch": msg_epoch,
+                    "timestamp_sim_s": msg_sim_s,
+                    "time_slice": msg_slice,
+                    "time": time_meta,
                     "message": entry.get("message"),
                     "message_id": metrics.get("message_id"),
                     "index": metrics.get("index"),
@@ -152,7 +191,16 @@ def _parse_network_file(path: Path) -> list[dict[str, Any]]:
                 }
             )
 
-    messages.sort(key=lambda m: (m["timestamp_epoch"], m.get("index") or 0))
+    def _sort_key(m: dict[str, Any]):
+        s = m.get("time_slice")
+        if s is not None:
+            return (int(s), m.get("index") or 0)
+        t = m.get("timestamp_sim_s")
+        if t is None:
+            t = m.get("timestamp_epoch")
+        return (float(t or 0.0), m.get("index") or 0)
+
+    messages.sort(key=_sort_key)
     return messages
 
 
@@ -176,21 +224,48 @@ def _parse_topology_file(path: Path) -> dict[str, Any]:
                 topic = data.get("tp")
 
             if "ts" in data and "n" in data:
+                time_meta = data.get("time") if isinstance(data.get("time"), dict) else None
+                snap_slice = _extract_time_slice(time_meta)
                 snapshots.append(
                     {
                         "ts": float(data["ts"]),
                         "profiles": data.get("n", {}) or {},
+                        "time_slice": snap_slice,
+                        "time": time_meta,
                     }
                 )
 
-    snapshots.sort(key=lambda s: s["ts"])
+    use_slice = bool(snapshots) and all(s.get("time_slice") is not None for s in snapshots)
+    if use_slice:
+        snapshots.sort(key=lambda s: int(s["time_slice"]))
+    else:
+        snapshots.sort(key=lambda s: s["ts"])
+
     snapshot_times = [s["ts"] for s in snapshots]
+    snapshot_slices = [s.get("time_slice") for s in snapshots]
     return {
         "topic": topic,
         "connection_graph": graph,
         "snapshots": snapshots,
         "snapshot_times": snapshot_times,
+        "snapshot_slices": snapshot_slices,
     }
+
+
+def _select_snapshot_for_message_slice(
+    message_slice: int,
+    snapshots: list[dict[str, Any]],
+    snapshot_slices: list[int | None],
+) -> dict[str, Any] | None:
+    if not snapshots:
+        return None
+    if not snapshot_slices or any(s is None for s in snapshot_slices):
+        return None
+
+    idx = bisect_left([int(s) for s in snapshot_slices], int(message_slice))
+    if idx >= len(snapshots):
+        return snapshots[-1]
+    return snapshots[idx]
 
 
 def _select_snapshot_for_message(message_ts: float, snapshots: list[dict[str, Any]], snapshot_times: list[float]) -> dict[str, Any] | None:
@@ -222,8 +297,22 @@ def _build_agent_timelines(
         affected_agents = set(connection_graph.get(sender, []))
         affected_agents.add(sender)
 
-        selected_snapshot = _select_snapshot_for_message(message["timestamp_epoch"], snapshots, snapshot_times)
+        msg_slice = message.get("time_slice")
+        selected_snapshot = None
+        if msg_slice is not None:
+            selected_snapshot = _select_snapshot_for_message_slice(
+                int(msg_slice),
+                snapshots,
+                [s.get("time_slice") for s in snapshots],
+            )
+        if selected_snapshot is None:
+            msg_time = message.get("timestamp_sim_s")
+            if msg_time is None:
+                msg_time = message["timestamp_epoch"]
+            selected_snapshot = _select_snapshot_for_message(float(msg_time), snapshots, snapshot_times)
+
         selected_snapshot_ts = selected_snapshot["ts"] if selected_snapshot else None
+        selected_snapshot_slice = selected_snapshot.get("time_slice") if selected_snapshot else None
         selected_profiles = selected_snapshot["profiles"] if selected_snapshot else {}
 
         for affected_agent in sorted(affected_agents):
@@ -233,6 +322,9 @@ def _build_agent_timelines(
                 "is_self_influence": affected_agent == sender,
                 "message_timestamp": message["timestamp"],
                 "message_timestamp_epoch": message["timestamp_epoch"],
+                "message_timestamp_sim_s": message.get("timestamp_sim_s"),
+                "message_time_slice": msg_slice,
+                "time": message.get("time"),
                 "message_index": message.get("index"),
                 "message_id": message.get("message_id"),
                 "message": message.get("message"),
@@ -240,15 +332,32 @@ def _build_agent_timelines(
                 "recommendation_indices": message.get("recommendation_indices", []),
                 "used_indices": message.get("used_indices", []),
                 "matched_topology_snapshot_ts": selected_snapshot_ts,
+                "matched_topology_snapshot_time_slice": selected_snapshot_slice,
                 "matched_topology_snapshot_delta_s": (
-                    selected_snapshot_ts - message["timestamp_epoch"] if selected_snapshot_ts is not None else None
+                    selected_snapshot_ts - float(message.get("timestamp_sim_s") if message.get("timestamp_sim_s") is not None else message["timestamp_epoch"])
+                    if selected_snapshot_ts is not None
+                    else None
+                ),
+                "matched_topology_snapshot_delta_slice": (
+                    int(selected_snapshot_slice) - int(msg_slice)
+                    if selected_snapshot_slice is not None and msg_slice is not None
+                    else None
                 ),
                 "topology_profile_for_agent": selected_profiles.get(affected_agent),
             }
             timelines.setdefault(affected_agent, []).append(event)
 
     for agent in timelines:
-        timelines[agent].sort(key=lambda e: (e["message_timestamp_epoch"], e.get("message_index") or 0))
+        def _event_sort_key(e: dict[str, Any]):
+            s = e.get("message_time_slice")
+            if s is not None:
+                return (int(s), e.get("message_index") or 0)
+            t = e.get("message_timestamp_sim_s")
+            if t is None:
+                t = e.get("message_timestamp_epoch")
+            return (float(t or 0.0), e.get("message_index") or 0)
+
+        timelines[agent].sort(key=_event_sort_key)
 
     return timelines
 
@@ -339,9 +448,37 @@ def create_cleaned_data(
         _write_jsonl(run_out_dir / "messages_with_alignment.jsonl", [
             {
                 **m,
-                "matched_topology_snapshot_ts": (
-                    _select_snapshot_for_message(m["timestamp_epoch"], topology_data["snapshots"], topology_data["snapshot_times"]) or {}
-                ).get("ts"),
+                **(
+                    {
+                        "matched_topology_snapshot_time_slice": (
+                            _select_snapshot_for_message_slice(
+                                int(m["time_slice"]),
+                                topology_data["snapshots"],
+                                topology_data.get("snapshot_slices", []),
+                            )
+                            or {}
+                        ).get("time_slice"),
+                        "matched_topology_snapshot_ts": (
+                            _select_snapshot_for_message_slice(
+                                int(m["time_slice"]),
+                                topology_data["snapshots"],
+                                topology_data.get("snapshot_slices", []),
+                            )
+                            or {}
+                        ).get("ts"),
+                    }
+                    if m.get("time_slice") is not None
+                    else {
+                        "matched_topology_snapshot_ts": (
+                            _select_snapshot_for_message(
+                                float(m.get("timestamp_sim_s") if m.get("timestamp_sim_s") is not None else m["timestamp_epoch"]),
+                                topology_data["snapshots"],
+                                topology_data["snapshot_times"],
+                            )
+                            or {}
+                        ).get("ts"),
+                    }
+                ),
             }
             for m in network_messages
         ])
