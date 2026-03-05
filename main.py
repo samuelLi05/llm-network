@@ -31,7 +31,7 @@ NUM_AGENTS = 30
 STREAM_NAME = "agent_stream"
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
-RUN_DURATION_SECONDS = 10800 # 3 hours
+RUN_DURATION_SECONDS = 3600 # 3 hours
 USE_LOCAL_LLM = True
 ENABLE_STANCE_WORKER = False
 STANCE_BATCH_SIZE = 5
@@ -74,13 +74,13 @@ GRAPH_MAX_DEGREE = 15
 ENABLE_EMBEDDING_CONTEXT = True
 ROLLING_STORE_MAX_ITEMS = 2000
 CONTEXT_TOP_K = 10
-PROFILE_WINDOW_SIZE = 50
+PROFILE_WINDOW_SIZE = 5
 PROFILE_SEED_WEIGHT = 5.0
 
 TOPOLOGY_LOG_INTERVAL_S = 5.0
 
-POISSON_MEAN_S = 5.0
-TIME_UNIT_MS = 1000
+POISSON_MEAN = 5.0
+TIME_UNIT_MS = 10000
 
 initial_prompt_template = (
     "You are a social media user who posts about {topic}. There are other users on the network who have different perspectives on this topic. "
@@ -165,7 +165,7 @@ async def main():
     # TimeManager: Poisson publish clock on a simulated timeline (starts at t=0ms).
     time_manager = TimeManager(
         global_interval=3.0,
-        poisson_mean=POISSON_MEAN_S,
+        poisson_mean=POISSON_MEAN,
         time_unit_ms=TIME_UNIT_MS,
     )
     time_manager.mode = "poisson"
@@ -431,11 +431,18 @@ async def main():
         topo_task = asyncio.create_task(_topology_loop())
 
     # 6. Kick off the conversation with an initial message from the first agent
-    initial_message = await agents[0].generate_response(
-        "Write your first social media post. Follow your fixed stance and provide reasoning. Keep it concise and natural, like a real person."
-    )
     console_logger.info(f"Agent 1 starting conversation:")
-    await agents[0].publish_message(initial_message)
+    if agents[0].time_manager:
+        async with agents[0].time_manager.publish_lock(agents[0].id):
+            initial_message = await agents[0].generate_response(
+                "Write your first social media post. Follow your fixed stance and provide reasoning. Keep it concise and natural, like a real person."
+            )
+            await agents[0]._do_publish(initial_message)
+    else:
+        initial_message = await agents[0].generate_response(
+            "Write your first social media post. Follow your fixed stance and provide reasoning. Keep it concise and natural, like a real person."
+        )
+        await agents[0].publish_message(initial_message)
 
     # 7. Run for the specified duration
     console_logger.info(f"Running for {RUN_DURATION_SECONDS} seconds...")

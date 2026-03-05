@@ -444,12 +444,19 @@ class NetworkAgent:
 
             # Do not treat the single incoming message as a high-importance prompt.
             # It is only a trigger; the recommendation-built feed context drives generation.
-            response = await self.generate_response(
+            prompt = (
                 "Write a standalone post that reflects your current perspective. "
                 "Output plain text only: no emojis, no hashtags, no all-caps lines, and no explicit engagement CTAs "
                 "(no 'like/share/reply/repost')."
             )
-            await self.publish_message(response)
+
+            if self.time_manager:
+                async with self.time_manager.publish_lock(self.id):
+                    response = await self.generate_response(prompt)
+                    await self._do_publish(response)
+            else:
+                response = await self.generate_response(prompt)
+                await self.publish_message(response)
 
     async def publish_message(self, message: str):
         """Publish a message to the Redis stream with rate limiting and logging."""

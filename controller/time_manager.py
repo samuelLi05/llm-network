@@ -2,6 +2,7 @@ import time
 import threading
 import asyncio
 import random
+import math
 from typing import Dict, Optional
 
 """Manages time intervals for agents to control publishing frequency.
@@ -25,6 +26,8 @@ class TimeManager:
             global_interval: Minimum seconds between any two publishes (stream-wide).
             default_interval: Default per-agent interval if not specified.
             intervals: Optional per-agent interval overrides.
+            poisson_mean: average number of messages in timeslice
+            time_unit_ms: length of discrete time slice in ms for poisson process
         """
         self.global_interval = global_interval
         self.default_interval = default_interval
@@ -38,9 +41,6 @@ class TimeManager:
         self.poisson_mean = float(poisson_mean)
         self.time_unit_ms = max(1, int(time_unit_ms))
 
-        # Global async mutex to ensure only one agent publishes at a time.
-        # Initialized lazily to avoid event-loop binding issues when constructing
-        # TimeManager outside a running loop.
         self._publish_mutex: Optional[asyncio.Lock] = None
 
         # Simulated clock state (poisson mode).
@@ -144,9 +144,13 @@ class TimeManager:
                 self._last_global_publish = now_s
                 self.last_publish[agent_id] = now_s
 
-                mean = max(1e-6, float(self.poisson_mean))
-                dt_s = float(self._rng.expovariate(1.0 / mean))
-                self._next_allowed_sim_ms = int(self._sim_time_ms + int(dt_s * 1000.0))
+                lam_per_slice = max(1e-9, float(self.poisson_mean))
+                slice_s = max(1e-9, float(self.time_unit_ms) / 1000.0)
+                rate_per_s = lam_per_slice / slice_s
+
+                dt_s = float(self._rng.expovariate(rate_per_s))
+                dt_ms = max(1, int(math.ceil(dt_s * 1000.0)))
+                self._next_allowed_sim_ms = int(self._sim_time_ms + dt_ms)
                 return
 
             now = self._time()
