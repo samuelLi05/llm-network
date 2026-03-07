@@ -27,6 +27,7 @@ class NetworkTopologyTracker:
         self,
         *,
         topic: str,
+        scoring_topic: Optional[str] = None,
         profile_store: AgentProfileStore,
         time_manager: Optional["TimeManager"] = None,
         redis_cache: Optional[RedisCache] = None,
@@ -39,6 +40,7 @@ class NetworkTopologyTracker:
         local_embedding_model: str = "all-mpnet-base-v2S",
     ):
         self.topic = topic
+        self.scoring_topic = str(scoring_topic or topic)
         self.profile_store = profile_store
         self.time_manager = time_manager
         self.redis_cache = redis_cache
@@ -47,7 +49,7 @@ class NetworkTopologyTracker:
         self.update_interval_s = float(update_interval_s)
 
         self._analyzer = EmbeddingAnalyzer(
-            topic,
+            self.scoring_topic,
             use_local_embedding_model=bool(use_local_embedding_model),
             use_baseline_statement=bool(use_baseline_statement),
             openai_embedding_model=openai_embedding_model,
@@ -71,7 +73,13 @@ class NetworkTopologyTracker:
         except Exception:
             return None
 
-    async def snapshot(self, agent_ids: list[str]) -> dict[str, Any]:
+    async def snapshot(
+        self,
+        agent_ids: list[str],
+        *,
+        include_vectors: bool = False,
+        include_seed_metadata: bool = False,
+    ) -> dict[str, Any]:
         profiles = []
         profile_by_id: dict[str, Any] = {}
         present_ids: list[str] = []
@@ -100,12 +108,22 @@ class NetworkTopologyTracker:
             vec_for_scoring = getattr(p, "score_vector", None) or mat[i].tolist()
             scored = await self._analyzer.score_vector(vec_for_scoring, include_vector=False)
             scored = scored or {}
-            nodes[agent_id] = {
+            node = {
                 "ts": float(scored.get("topic_similarity", 0.0)),
                 "ss": float(scored.get("stance_score", 0.0)),
                 "str": float(scored.get("strength", 0.0)),
                 "uat": float(getattr(p, "updated_at", 0.0)),
             }
+            if include_seed_metadata:
+                node["seed_text"] = str(getattr(p, "seed_text", "") or "")
+                node["seeded"] = bool(getattr(p, "seed_vector", None) is not None)
+            if include_vectors:
+                node["vec"] = to_np(getattr(p, "vector", []), dtype=np.float32).astype(np.float32, copy=False).tolist()
+                score_out = getattr(p, "score_vector", None)
+                if score_out is None:
+                    score_out = vec_for_scoring
+                node["svec"] = to_np(score_out, dtype=np.float32).astype(np.float32, copy=False).tolist()
+            nodes[agent_id] = node
 
         info = self._time_info()
         return {

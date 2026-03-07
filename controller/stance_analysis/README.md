@@ -81,7 +81,7 @@ Where the second term penalizes “neutral-ish” vectors.
 ---
 
 ### `agent_profile_store.py`
-Maintains a **sliding-window** per-agent embedding profile (seed prompt + interactions).
+Maintains a **sliding-window** per-agent embedding profile (bootstrapped from the seed prompt, then driven by interaction history).
 
 Data model
 - `@dataclass AgentProfile:`
@@ -92,7 +92,7 @@ Data model
 
 Key class
 - `class AgentProfileStore:`
-  - `__init__(redis: Optional[AsyncRedis] = None, *, window_size: int = 200, seed_weight: float = 5.0, authored_weight: float = 1.0, consumed_weight: float = 0.7, key_prefix: str = "agent_profile:")`
+  - `__init__(redis: Optional[AsyncRedis] = None, *, window_size: int = 200, seed_weight: float = 0.0, authored_weight: float = 1.0, consumed_weight: float = 0.0, key_prefix: str = "agent_profile:")`
   - `await ensure_initialized(agent_id: str, *, seed_text: str, topic_for_embedding: str) -> AgentProfile`
   - `await add_interaction_vector(agent_id: str, *, vector: list[float] | np.ndarray, interaction_type: str, ts: Optional[float] = None, metadata: Optional[dict] = None) -> AgentProfile`
   - `await add_interaction(agent_id: str, *, text: str, interaction_type: str, topic: str, ts: Optional[float] = None, metadata: Optional[dict] = None) -> AgentProfile`
@@ -110,9 +110,13 @@ Maintain a running weighted sum:
 
 $$S = \sum_{i=1}^{N} w_i x_i$$
 
-Then the profile vector is:
+Bootstrap state (before any weighted history exists):
 
-$$v = \widehat{(S + w_s s)}$$
+$$v_0 = \hat{s}$$
+
+After the first weighted interaction enters the profile window, the seed is phased out and the profile vector becomes:
+
+$$v = \hat{S}$$
 
 Sliding-window update
 - When the window grows beyond `window_size`, the oldest entry is subtracted from $S$.

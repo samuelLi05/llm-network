@@ -86,7 +86,7 @@ The following are tunable parameters for the LLM-network.
 - `ROLLING_STORE_MAX_ITEMS` - Max items to retain in the rolling embedded store.
 - `CONTEXT_TOP_K` - Number of top-k retrieved items to include as generation context for agent (recommendation feed).
 - `PROFILE_WINDOW_SIZE` - Sliding window size for agent interaction history used to build profiles.
-- `PROFILE_SEED_WEIGHT` - Weight applied to the agent's init prompt when computing profile vectors.
+- `PROFILE_SEED_WEIGHT` - Bootstrap-only seed weight for the init prompt; after the first weighted profile update, only the sliding authored-history window is used.
 - `TOPOLOGY_LOG_INTERVAL` - Seconds between topology snapshots written to logs.
 
 #### Agent parameters (defaults in `agents/network_agent.py`)

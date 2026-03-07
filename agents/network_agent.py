@@ -42,6 +42,7 @@ class NetworkAgent:
         self,
         id: str,
         init_prompt: str,
+        authoritative_sentence: Optional[str] = None,
         topic: Optional[str] = None,
         stream_name: Optional[str] = None,
         stream_group: Optional[str] = None,
@@ -112,7 +113,11 @@ class NetworkAgent:
         self.global_dedupe_ttl_s = int(os.getenv("GLOBAL_DEDUPE_TTL_S", "180"))
         self._pending_publish_fingerprint: Optional[str] = None
 
-        self._authoritative_sentence = self._extract_authoritative_sentence(self.init_prompt)
+        self._authoritative_sentence = (
+            (authoritative_sentence or "").strip()
+            or self._extract_authoritative_sentence(self.init_prompt)
+        )
+        self.authoritative_sentence = self._authoritative_sentence
 
         self._publish_lock = asyncio.Lock()
         self._consumer_task: Optional[asyncio.Task] = None
@@ -151,16 +156,28 @@ class NetworkAgent:
     def _extract_authoritative_sentence(init_prompt: str) -> Optional[str]:
         """Best-effort extraction of the agent's unique stance sentence.
 
-        main.py currently embeds it in the init prompt like:
-        "The sentence <X> is your fixed stance ..."
+        Supports both the current main.py wording and the older notebook wording.
         """
         if not init_prompt:
             return None
-        m = re.search(r"The sentence\s+(.*?)\s+is your fixed stance", init_prompt, flags=re.IGNORECASE | re.DOTALL)
-        if not m:
-            return None
-        stance = (m.group(1) or "").strip()
-        return stance or None
+        patterns = [
+            r'The sentence\s+"([^"]+)"\s+reflects your stable perspective',
+            r'The sentence\s+"([^"]+)"\s+is your fixed stance',
+            r'The sentence\s+(.*?)\s+is your fixed stance',
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, init_prompt, flags=re.IGNORECASE | re.DOTALL)
+            if not m:
+                continue
+            stance = (m.group(1) or "").strip().strip('"')
+            if stance:
+                return stance
+        return None
+
+    def _profile_topic(self) -> Optional[str]:
+        if self.rolling_store and getattr(self.rolling_store, "topic", None):
+            return str(self.rolling_store.topic)
+        return self.topic
 
     @staticmethod
     def _normalize_for_similarity(text: str) -> str:
@@ -368,14 +385,15 @@ class NetworkAgent:
         await self.stream_client.create_consumer_group(self.stream_name, self.stream_group)
 
         # Ensure the agent has a profile seeded from its init prompt.
-        if self.profile_store and self.topic:
+        profile_topic = self._profile_topic()
+        if self.profile_store and profile_topic and self._authoritative_sentence:
             try:
                 # Do not block startup on embedding/profile work.
                 asyncio.create_task(
                     self.profile_store.ensure_initialized(
                         self.id,
-                        seed_text=self.init_prompt,
-                        topic_for_embedding=self.topic,
+                        seed_text=self._authoritative_sentence,
+                        topic_for_embedding=profile_topic,
                     )
                 )
             except Exception as exc:
@@ -770,13 +788,14 @@ class NetworkAgent:
         relevant embedded messages from the rolling store.
         Fallback: original last-N messages from RedisCache.
         """
-        if not (self.rolling_store and self.profile_store and self.topic):
+        profile_topic = self._profile_topic()
+        if not (self.rolling_store and self.profile_store and profile_topic):
             meta = {
                 "source": "cache",
                 "reason": "reco_disabled",
                 "has_rolling_store": bool(self.rolling_store),
                 "has_profile_store": bool(self.profile_store),
-                "has_topic": bool(self.topic),
+                "has_topic": bool(profile_topic),
             }
             if self.log_recommendations:
                 console_logger.info(f"Agent {self.id} reco disabled -> fallback: {meta}")
@@ -790,7 +809,7 @@ class NetworkAgent:
                     if self.log_recommendations:
                         console_logger.info(f"Agent {self.id} reco fallback: profile_vector_missing")
                 else:
-                    view = await self.profile_store.get_agent_topic_view(self.id, topic=self.topic)
+                    view = await self.profile_store.get_agent_topic_view(self.id, topic=profile_topic)
                     if view is None:
                         if self.log_recommendations:
                             console_logger.info(f"Agent {self.id} reco fallback: topic_view_missing")

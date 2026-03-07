@@ -112,7 +112,7 @@ async def main():
         )
 
     # Precomputed agent profiles (sliding window)
-    store = AgentProfileStore(redis=None, window_size=12, seed_weight=5.0, use_local_embedding_model=True)
+    store = AgentProfileStore(redis=None, window_size=12, seed_weight=0.0, use_local_embedding_model=True)
 
     await store.ensure_initialized("test_agent", seed_text="hello", topic_for_embedding=topic)
     await store.add_interaction("test_agent", text="ignored", interaction_type="consumed", topic=topic)

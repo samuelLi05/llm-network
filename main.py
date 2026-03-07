@@ -31,7 +31,7 @@ NUM_AGENTS = 30
 STREAM_NAME = "agent_stream"
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
-RUN_DURATION_SECONDS = 3600 # 3 hours
+RUN_DURATION_SECONDS = 10800 # 3 hours
 USE_LOCAL_LLM = True
 ENABLE_STANCE_WORKER = False
 STANCE_BATCH_SIZE = 5
@@ -75,7 +75,7 @@ ENABLE_EMBEDDING_CONTEXT = True
 ROLLING_STORE_MAX_ITEMS = 2000
 CONTEXT_TOP_K = 10
 PROFILE_WINDOW_SIZE = 5
-PROFILE_SEED_WEIGHT = 5.0
+PROFILE_SEED_WEIGHT = 0.0
 
 TOPOLOGY_LOG_INTERVAL_S = 5.0
 
@@ -120,6 +120,8 @@ async def main():
         console_logger.info(f"Baseline mode enabled: topic='{topic}' stance='{BASELINE_STATEMENT}'")
 
         # Build a pool of fixed stance sentences mapped to stance weights.
+        # Keep this aligned with the single-shot baseline pool so initialization
+        # can surface both negative and positive stance scores in topology logs.
         fixed_pool = prompt_generator.generate_fixed_opinions(
             BASELINE_STATEMENT,
             weighted_values=[-1.0, -0.5, 0.0, 0.5, 1.0],
@@ -128,12 +130,55 @@ async def main():
         if not fixed_items:
             raise RuntimeError("No fixed templates found for baseline mode")
 
+        extra_by_weight: dict[float, list[str]] = {
+            -1.0: [
+                f"I reject the claim that {BASELINE_STATEMENT}.",
+                f"The idea that {BASELINE_STATEMENT} is false and dangerous misinformation.",
+                f"I am firmly against the statement: {BASELINE_STATEMENT}.",
+            ],
+            -0.5: [
+                f"I’m skeptical of the claim that {BASELINE_STATEMENT}.",
+                f"I doubt that {BASELINE_STATEMENT} is accurate.",
+                f"I question the statement: {BASELINE_STATEMENT}.",
+            ],
+            0.0: [
+                f"I’m undecided about whether {BASELINE_STATEMENT}.",
+                f"I’m not convinced either way that {BASELINE_STATEMENT}.",
+                f"I remain neutral on the statement: {BASELINE_STATEMENT}.",
+            ],
+            0.5: [
+                f"I tend to agree that {BASELINE_STATEMENT}.",
+                f"I think there may be truth to the idea that {BASELINE_STATEMENT}.",
+                f"I lean toward believing the statement: {BASELINE_STATEMENT}.",
+            ],
+            1.0: [
+                f"I strongly believe that {BASELINE_STATEMENT}.",
+                f"I’m certain the statement is true: {BASELINE_STATEMENT}.",
+                f"There’s no doubt in my mind that {BASELINE_STATEMENT}.",
+            ],
+        }
+
+        pool_by_weight: dict[float, list[str]] = {w: [] for w in [-1.0, -0.5, 0.0, 0.5, 1.0]}
+        for stance_sentence, weight in fixed_items:
+            pool_by_weight[float(weight)].append(stance_sentence)
+        for weight, extras in extra_by_weight.items():
+            pool_by_weight[float(weight)].extend(extras)
+
+        expanded_items: list[tuple[str, float]] = []
+        for weight in [-1.0, -0.5, 0.0, 0.5, 1.0]:
+            seen: set[str] = set()
+            for stance_sentence in pool_by_weight[weight]:
+                if stance_sentence in seen:
+                    continue
+                seen.add(stance_sentence)
+                expanded_items.append((stance_sentence, float(weight)))
+
         # Assign each agent a fixed stance sentence + associated stance weight.
         # We cycle through the pool to guarantee coverage, then shuffle for variety.
         rng = random.Random(BASELINE_ASSIGNMENT_SEED)
         assignments = []
         while len(assignments) < NUM_AGENTS:
-            assignments.extend(fixed_items)
+            assignments.extend(expanded_items)
         assignments = assignments[:NUM_AGENTS]
         rng.shuffle(assignments)
 
@@ -254,6 +299,7 @@ async def main():
         )
         topology_tracker = NetworkTopologyTracker(
             topic=topic,
+            scoring_topic=BASELINE_STATEMENT if USE_BASELINE_STATEMENT else topic,
             profile_store=profile_store,
             time_manager=time_manager,
             redis_cache=topology_cache,
@@ -300,6 +346,7 @@ async def main():
         agent = NetworkAgent(
             id=agent_id,
             init_prompt=init_prompt,
+            authoritative_sentence=agent_prompts[i],
             topic=topic,
             stream_name=STREAM_NAME,
             stream_group=f"group_{i+1}",
@@ -368,6 +415,25 @@ async def main():
             )
         except Exception as exc:
             console_logger.info(f"Failed to log connection graph snapshot (continuing): {exc}")
+
+    if profile_store and topology_tracker and topology_logger:
+        try:
+            profile_topic = BASELINE_STATEMENT if USE_BASELINE_STATEMENT else topic
+            await asyncio.gather(
+                *(
+                    profile_store.ensure_initialized(
+                        agent.id,
+                        seed_text=str(getattr(agent, "authoritative_sentence", None) or agent_prompts[i]),
+                        topic_for_embedding=profile_topic,
+                    )
+                    for i, agent in enumerate(agents)
+                )
+            )
+            snap = await topology_tracker.maybe_update(agent_ids, force=True)
+            if snap is not None:
+                topology_logger.log_snapshot(snap)
+        except Exception as exc:
+            console_logger.info(f"Failed to log seeded profile snapshot (continuing): {exc}")
 
     # 3. Initialize OrderManager with all agents
     order_manager = OrderManager(

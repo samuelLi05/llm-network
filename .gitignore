@@ -9,3 +9,4 @@ old_data/
 *.log
 *.csv
 modeling/cleaned_data/
+run_network.sh

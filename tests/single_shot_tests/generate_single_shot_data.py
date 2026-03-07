@@ -160,6 +160,7 @@ async def generate_data():
         agent = NetworkAgent(
             id=agent_id,
             init_prompt=str(sample["init_prompt"]),
+            authoritative_sentence=str(sample.get("stance_sentence") or ""),
             topic=topic,
             llm_service=llm_service,
         )

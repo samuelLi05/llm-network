@@ -32,6 +32,7 @@ class AgentProfile:
 
     # --- Optional / backwards-compatible fields (must come after non-defaults) ---
     score_embedding_model: str = ""
+    seed_text: str = ""
 
     # Normalized mean vector in the scoring model space (used for stance/topic/strength scoring).
     score_vector: Optional[list[float]] = None
@@ -44,11 +45,13 @@ class AgentProfile:
 class AgentProfileStore:
     """Maintains a rolling (sliding-window) embedding profile per agent.
 
-    The agent vector is a normalized weighted mean of:
-      - a fixed seed embedding derived from the agent's system prompt (weighted heavily)
-      - the last N interactions (authored + consumed), each embedded once
+    The agent vector boots from a seed embedding derived from the agent's
+    authoritative stance sentence. After the first weighted interaction enters
+    the window, the seed is phased out and the profile is driven only by the
+    rolling window.
 
-    This lets you precompute agent stance and do feed ranking using only dot products.
+    This lets you precompute agent stance and do feed ranking using only dot
+    products while still starting each agent from its initialization prompt.
     """
 
     def __init__(
@@ -56,7 +59,7 @@ class AgentProfileStore:
         redis: Optional[AsyncRedis] = None,
         *,
         window_size: int = 200,
-        seed_weight: float = 5.0,
+        seed_weight: float = 0.0,
         authored_weight: float = 1.0,
         consumed_weight: float = 0.0,
         key_prefix: str = "agent_profile:",
@@ -94,6 +97,37 @@ class AgentProfileStore:
     @staticmethod
     def _zeros(dim: int) -> list[float]:
         return [0.0] * dim
+
+    @staticmethod
+    def _has_weighted_history(profile: AgentProfile) -> bool:
+        try:
+            return float(profile.total_weight or 0.0) > 0.0
+        except (TypeError, ValueError):
+            return False
+
+    def _recompute_profile_vectors(self, profile: AgentProfile) -> None:
+        """Keep the seed vector only for the bootstrap state.
+
+        Before any weighted interactions exist, the initialized seed vector is
+        the only profile signal in play. Once the rolling window has weighted
+        history, phase the seed out permanently and use only the window sum.
+        """
+        if not self._has_weighted_history(profile):
+            if profile.seed_vector is None:
+                raise RuntimeError("Bootstrap profile is missing seed_vector")
+            if profile.score_seed_vector is None:
+                raise RuntimeError("Bootstrap profile is missing score_seed_vector")
+
+            profile.vector = l2_normalize_np(profile.seed_vector)
+            profile.score_vector = l2_normalize_np(profile.score_seed_vector)
+            return
+
+        if float(profile.seed_weight or 0.0) != 0.0:
+            profile.seed_weight = 0.0
+
+        profile.vector = l2_normalize_np(to_np(profile.sum_vector, dtype=np.float32))
+        score_combined = profile.score_sum_vector if profile.score_sum_vector is not None else profile.sum_vector
+        profile.score_vector = l2_normalize_np(to_np(score_combined, dtype=np.float32))
 
     async def load(self, agent_id: str) -> Optional[AgentProfile]:
         if self.redis is None:
@@ -147,7 +181,7 @@ class AgentProfileStore:
         """Initialize a profile if missing.
 
         We use EmbeddingAnalyzer(topic_for_embedding) only to access the configured
-        embedding model and embed the seed_text once.
+        embedding model and embed the authoritative seed_text once.
         """
         existing = await self.load(agent_id)
         if existing is not None:
@@ -169,6 +203,7 @@ class AgentProfileStore:
             agent_id=agent_id,
             embedding_model=seed["model"],
             score_embedding_model=str(seed.get("score_model") or seed.get("model") or ""),
+            seed_text=str(seed_text or ""),
             window_size=self.window_size,
             seed_weight=self.seed_weight,
             authored_weight=self.authored_weight,
@@ -254,17 +289,7 @@ class AgentProfileStore:
                 profile.score_sum_vector = sub_scaled_np(profile.score_sum_vector, old_score_vec, old_w)
                 profile.total_weight -= old_w
 
-        # Compute final agent vector = normalize(seed_weight*seed_vec + sum_vector)
-        combined = to_np(profile.sum_vector, dtype=np.float32)
-        if profile.seed_vector is not None and profile.seed_weight > 0:
-            combined = add_scaled_np(combined, profile.seed_vector, float(profile.seed_weight))
-
-        profile.vector = l2_normalize_np(combined)
-
-        score_combined = to_np(profile.score_sum_vector if profile.score_sum_vector is not None else profile.sum_vector, dtype=np.float32)
-        if profile.score_seed_vector is not None and profile.seed_weight > 0:
-            score_combined = add_scaled_np(score_combined, profile.score_seed_vector, float(profile.seed_weight))
-        profile.score_vector = l2_normalize_np(score_combined)
+        self._recompute_profile_vectors(profile)
         profile.updated_at = time.time()
 
         await self.save(profile)
@@ -290,8 +315,6 @@ class AgentProfileStore:
 
         if interaction_type not in {"authored", "consumed"}:
             raise ValueError("interaction_type must be 'authored' or 'consumed'")
-
-        weight = profile.authored_weight if interaction_type == "authored" else profile.consumed_weight
 
         analyzer = self._make_analyzer(topic)
         embedded = await analyzer.embed_and_score(text, include_vector=True)
