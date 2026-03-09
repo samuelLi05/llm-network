@@ -79,8 +79,8 @@ PROFILE_SEED_WEIGHT = 0.0
 
 TOPOLOGY_LOG_INTERVAL_S = 5.0
 
-POISSON_MEAN = 5.0
-TIME_UNIT_MS = 10000
+POISSON_MEAN = 20.0
+TIME_UNIT_MS = 20000
 
 initial_prompt_template = (
     "You are a social media user who posts about {topic}. There are other users on the network who have different perspectives on this topic. "
