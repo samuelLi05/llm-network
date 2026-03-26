@@ -61,6 +61,11 @@ BASELINE_TOPIC = "vaccine safety and autism"
 # Seed for assigning baseline stances to agents
 BASELINE_ASSIGNMENT_SEED = 1234
 
+# Vary initial stance distribution across runs (no env vars).
+# Options: "uniform" | "bimodal_polarized" | "moderate_centered" | "skew_pro" | "skew_anti"
+INITIAL_CONDITION_MODE = os.getenv("INITIAL_CONDITION_MODE", "uniform")
+# Separate seed for sampling stance weights within a mode (lets you run multiple replicates).
+INITIAL_CONDITION_SEED = int(os.getenv("INITIAL_CONDITION_SEED", "1234"))
 # Connection graph, define the size of the random hamiltonian graph
 GRAPH_SEED = 42
 GRAPH_MIN_DEGREE = 8
@@ -118,6 +123,55 @@ async def main():
     if USE_BASELINE_STATEMENT:
         topic = BASELINE_TOPIC
         console_logger.info(f"Baseline mode enabled: topic='{topic}' stance='{BASELINE_STATEMENT}'")
+        console_logger.info(
+            f"Initial condition mode: {INITIAL_CONDITION_MODE} (seed={INITIAL_CONDITION_SEED})"
+        )
+
+        def _initial_condition_weights(
+            n: int,
+            mode: str,
+            seed: int,
+            weights: list[float],
+        ) -> list[float]:
+            """Return length-n list of stance weights based on a named initial-condition mode."""
+            if mode not in {"uniform", "bimodal_polarized", "moderate_centered", "skew_pro", "skew_anti"}:
+                raise ValueError(f"Unknown INITIAL_CONDITION_MODE: {mode}")
+
+            if weights != [-1.0, -0.5, 0.0, 0.5, 1.0]:
+                raise ValueError(f"Unexpected weights ordering: {weights}")
+
+            # Fractions sum to 1.0. We convert to integer counts with deterministic rounding.
+            if mode == "uniform":
+                fracs = [-1.0, -0.5, 0.0, 0.5, 1.0]
+                probs = [0.2, 0.2, 0.2, 0.2, 0.2]
+            elif mode == "bimodal_polarized":
+                probs = [0.45, 0.05, 0.0, 0.05, 0.45]
+            elif mode == "moderate_centered":
+                probs = [0.05, 0.225, 0.45, 0.225, 0.05]
+            elif mode == "skew_pro":
+                probs = [0.10, 0.10, 0.20, 0.25, 0.35]
+            else:  # skew_anti
+                probs = [0.35, 0.25, 0.20, 0.10, 0.10]
+
+            # Deterministic count allocation: floor then distribute remainder by largest fractional parts.
+            raw = [p * n for p in probs]
+            counts = [int(x) for x in raw]
+            remainder = n - sum(counts)
+            if remainder:
+                frac_parts = sorted(
+                    [(i, raw[i] - counts[i]) for i in range(len(raw))],
+                    key=lambda t: t[1],
+                    reverse=True,
+                )
+                for k in range(remainder):
+                    counts[frac_parts[k % len(counts)][0]] += 1
+
+            assigned: list[float] = []
+            for w, c in zip(weights, counts):
+                assigned.extend([float(w)] * int(c))
+            rng = random.Random(int(seed))
+            rng.shuffle(assigned)
+            return assigned
 
         # Build a pool of fixed stance sentences mapped to stance weights.
         # Keep this aligned with the single-shot baseline pool so initialization
@@ -174,13 +228,28 @@ async def main():
                 expanded_items.append((stance_sentence, float(weight)))
 
         # Assign each agent a fixed stance sentence + associated stance weight.
-        # We cycle through the pool to guarantee coverage, then shuffle for variety.
+        # We vary the *distribution of stance weights* via INITIAL_CONDITION_MODE,
+        # while sampling a (sentence, weight) pair from that weight bucket.
+        weights = [-1.0, -0.5, 0.0, 0.5, 1.0]
+        items_by_weight: dict[float, list[tuple[str, float]]] = {w: [] for w in weights}
+        for stance_sentence, weight in expanded_items:
+            items_by_weight[float(weight)].append((stance_sentence, float(weight)))
+        for w in weights:
+            if not items_by_weight[w]:
+                raise RuntimeError(f"No stance sentences available for weight={w}")
+
+        sampled_weights = _initial_condition_weights(
+            n=NUM_AGENTS,
+            mode=INITIAL_CONDITION_MODE,
+            seed=INITIAL_CONDITION_SEED,
+            weights=weights,
+        )
+
         rng = random.Random(BASELINE_ASSIGNMENT_SEED)
-        assignments = []
-        while len(assignments) < NUM_AGENTS:
-            assignments.extend(expanded_items)
-        assignments = assignments[:NUM_AGENTS]
-        rng.shuffle(assignments)
+        assignments: list[tuple[str, float]] = []
+        for w in sampled_weights:
+            bucket = items_by_weight[float(w)]
+            assignments.append(rng.choice(bucket))
 
         agent_prompts = [s for (s, _w) in assignments]
         for i in range(NUM_AGENTS):
