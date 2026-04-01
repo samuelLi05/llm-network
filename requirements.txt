@@ -16,3 +16,4 @@ torchvision>=0.16.0
 sentence-transformers>=2.6.0
 peft>=0.14.0
 networkx>=3.0
+cvxpy==1.8.2
