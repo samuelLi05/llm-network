@@ -126,3 +126,68 @@ def compute_wasserstein_distance(y_true, y_pred):
         return np.nan
 
     return float(wasserstein_distance(y_true, y_pred))
+
+
+def compute_eigenvalue(X, Y, neighbors, intercepts):
+    X = np.asarray(X, dtype=float)
+    Y = np.asarray(Y, dtype=float)
+    if X.ndim != 2 or Y.ndim != 2 or X.shape != Y.shape:
+        raise ValueError('X and Y must be 2D arrays with identical shape (num_samples, n_agents)')
+
+    m, n = X.shape
+
+    # Start from the exact least-squares construction.
+    # For one transition z_t, W z_t produces [w_1^T z_t, ..., w_n^T z_t]^T.
+    # Define Q(z_t) = I_n ⊗ z_t^T, so
+    #   Q(z_t) w = W z_t
+    # with w flattened row-wise from W.
+    # Stacking all transitions gives the full design matrix A.
+    # If mask entries are inactive, those columns become exact zeros in A.
+    # Then A has the exact structure:
+    #   A = [A_active | 0]
+    # and the Gram is:
+    #   A^T A = [[A_active^T A_active, 0], [0, 0]].
+    # Therefore the eigenvalues of A_active^T A_active are contained in the
+    # eigenvalues of A^T A, independent of column order.
+
+    # Build mask for neighbor structure over flattened W (size n^2)
+    mask = np.zeros((n, n), dtype=float)
+    for i in range(n):
+        for j in neighbors[i]:
+            mask[i, j] = 1.0
+    mask_flat = mask.reshape(-1)  # shape (n^2,)
+
+    q_blocks = []
+    for t in range(m):
+        zt = X[t].reshape(1, -1)  # (1, n)
+        Q_t = np.kron(np.eye(n, dtype=float), zt)
+        Q_t = Q_t * mask_flat  # broadcast across rows
+        q_blocks.append(Q_t)
+
+    A = np.vstack(q_blocks)
+    y_vec = Y.reshape(-1)
+
+    if intercepts:
+        A = np.hstack([A, np.ones((A.shape[0], 1), dtype=float)])
+
+    gram_full = A.T @ A
+    eigvals_full = np.linalg.eigvalsh(gram_full)
+
+    active_cols = mask_flat != 0
+    if intercepts:
+        active_cols = np.concatenate([active_cols, [True]])
+
+    A_reduced = A[:, active_cols]
+    gram_reduced = A_reduced.T @ A_reduced
+    eigvals_reduced = np.linalg.eigvalsh(gram_reduced)
+
+    return {
+        'eigvals_full': eigvals_full,
+        'eigvals_reduced': eigvals_reduced,
+        'gram_full_shape': gram_full.shape,
+        'gram_reduced_shape': gram_reduced.shape,
+        'active_param_count': int(np.count_nonzero(mask_flat)),
+        'full_param_count': int(mask_flat.size) + (1 if intercepts else 0),
+    }
+
+
