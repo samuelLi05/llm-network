@@ -161,11 +161,12 @@ def compute_eigenvalue(X, Y, neighbors, intercepts):
     for t in range(m):
         zt = X[t].reshape(1, -1)  # (1, n)
         Q_t = np.kron(np.eye(n, dtype=float), zt)
-        Q_t = Q_t * mask_flat  # broadcast across rows
         q_blocks.append(Q_t)
 
     A = np.vstack(q_blocks)
     y_vec = Y.reshape(-1)
+
+    print (A)
 
     if intercepts:
         A = np.hstack([A, np.ones((A.shape[0], 1), dtype=float)])
@@ -177,17 +178,9 @@ def compute_eigenvalue(X, Y, neighbors, intercepts):
     if intercepts:
         active_cols = np.concatenate([active_cols, [True]])
 
-    A_reduced = A[:, active_cols]
-    gram_reduced = A_reduced.T @ A_reduced
-    eigvals_reduced = np.linalg.eigvalsh(gram_reduced)
-
     return {
         'eigvals_full': eigvals_full,
-        'eigvals_reduced': eigvals_reduced,
         'gram_full_shape': gram_full.shape,
-        'gram_reduced_shape': gram_reduced.shape,
-        'active_param_count': int(np.count_nonzero(mask_flat)),
-        'full_param_count': int(mask_flat.size) + (1 if intercepts else 0),
     }
 
 

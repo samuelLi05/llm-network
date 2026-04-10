@@ -29,24 +29,21 @@ def _build_transitions(W, steps, shock_std, rng):
 	return np.asarray(X, dtype=float), np.asarray(Y, dtype=float)
 
 
+def _build_stacked_independent_transitions(W, n_trajectories, steps_per_trajectory, shock_std, rng):
+	X_blocks, Y_blocks = [], []
+	for _ in range(n_trajectories):
+		X_t, Y_t = _build_transitions(W, steps=steps_per_trajectory, shock_std=shock_std, rng=rng)
+		X_blocks.append(X_t)
+		Y_blocks.append(Y_t)
+	return np.vstack(X_blocks), np.vstack(Y_blocks)
+
+
 def _min_positive_eigvals(values, tol=1e-12):
 	vals = np.asarray(values, dtype=float)
 	pos = vals[vals > tol]
 	if pos.size == 0:
 		return 0.0
 	return float(np.min(pos))
-
-
-def _assert_multiset_subset_with_tolerance(sub_vals, full_vals, rtol=1e-8, atol=1e-10):
-	sub_vals = np.asarray(sub_vals, dtype=float)
-	full_vals = np.asarray(full_vals, dtype=float)
-	used = np.zeros(full_vals.shape[0], dtype=bool)
-
-	for sv in sub_vals:
-		idx = np.where(np.isclose(full_vals, sv, rtol=rtol, atol=atol) & (~used))[0]
-		if idx.size == 0:
-			raise AssertionError(f'No matching full-spectrum eigenvalue found for reduced eigenvalue {sv}')
-		used[idx[0]] = True
 
 
 def test_compute_eigenvalue_full_equals_reduced_for_all_neighbors():
@@ -59,8 +56,7 @@ def test_compute_eigenvalue_full_equals_reduced_for_all_neighbors():
 	out = compute_eigenvalue(X, Y, neighbors, intercepts=False)
 
 	assert out['gram_full_shape'] == (n * n, n * n)
-	assert out['gram_reduced_shape'] == (n * n, n * n)
-	np.testing.assert_allclose(out['eigvals_full'], out['eigvals_reduced'], rtol=1e-9, atol=1e-11)
+	assert out['eigvals_full'].shape == (n * n,)
 
 
 def test_compute_eigenvalue_min_reduced_eig_increases_with_richer_transitions():
@@ -68,26 +64,41 @@ def test_compute_eigenvalue_min_reduced_eig_increases_with_richer_transitions():
 	n = 10
 	W = _random_row_stochastic_matrix(n, rng)
 	neighbors = {i: list(range(n)) for i in range(n)}
+	shock_std = 0.08
+	steps_per_trajectory = 80
 
-	X_poor, Y_poor = _build_transitions(W, steps=120, shock_std=1e-9, rng=rng)
-	X_rich, Y_rich = _build_transitions(W, steps=320, shock_std=0.20, rng=rng)
+	X_poor, Y_poor = _build_stacked_independent_transitions(
+		W,
+		n_trajectories=2,
+		steps_per_trajectory=steps_per_trajectory,
+		shock_std=shock_std,
+		rng=rng,
+	)
+	X_rich, Y_rich = _build_stacked_independent_transitions(
+		W,
+		n_trajectories=8,
+		steps_per_trajectory=steps_per_trajectory,
+		shock_std=shock_std,
+		rng=rng,
+	)
 
 	poor = compute_eigenvalue(X_poor, Y_poor, neighbors, intercepts=False)
 	rich = compute_eigenvalue(X_rich, Y_rich, neighbors, intercepts=False)
 
-	poor_min = _min_positive_eigvals(poor['eigvals_reduced'])
-	rich_min = _min_positive_eigvals(rich['eigvals_reduced'])
+	poor_min = _min_positive_eigvals(poor['eigvals_full'])
+	rich_min = _min_positive_eigvals(rich['eigvals_full'])
 
 	assert rich_min > poor_min
 
 
-def test_compute_eigenvalue_reduced_is_subset_of_full_with_sparse_neighbors():
+def test_compute_eigenvalue_full_is_neighbor_invariant():
 	rng = np.random.default_rng(19)
 	n = 10
 	neighbors = {
 		i: sorted({i, (i - 1) % n, (i + 1) % n, (i + 3) % n})
 		for i in range(n)
 	}
+	all_neighbors = {i: list(range(n)) for i in range(n)}
 
 	W = np.zeros((n, n), dtype=float)
 	for i in range(n):
@@ -95,12 +106,9 @@ def test_compute_eigenvalue_reduced_is_subset_of_full_with_sparse_neighbors():
 		W[i, ns] = rng.dirichlet(np.ones(len(ns)))
 
 	X, Y = _build_transitions(W, steps=180, shock_std=0.08, rng=rng)
-	out = compute_eigenvalue(X, Y, neighbors, intercepts=False)
+	out_sparse = compute_eigenvalue(X, Y, neighbors, intercepts=False)
+	out_all = compute_eigenvalue(X, Y, all_neighbors, intercepts=False)
 
-	assert out['active_param_count'] < out['full_param_count']
-	_assert_multiset_subset_with_tolerance(
-		out['eigvals_reduced'],
-		out['eigvals_full'],
-		rtol=1e-7,
-		atol=1e-9,
-	)
+	assert out_sparse['gram_full_shape'] == (n * n, n * n)
+	assert out_all['gram_full_shape'] == (n * n, n * n)
+	np.testing.assert_allclose(out_sparse['eigvals_full'], out_all['eigvals_full'], rtol=1e-9, atol=1e-11)
