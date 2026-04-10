@@ -2,13 +2,13 @@ import json
 from pathlib import Path
 import numpy as np
 from collections import defaultdict
-from scipy.optimize import root_scalar
 
 FIXED_MEAN_MSGS_PER_SLICE = 15.0
 FIXED_BASE_WINDOW_MS = 8000.0
 FIXED_MSG_RATE_PER_MS = FIXED_MEAN_MSGS_PER_SLICE / FIXED_BASE_WINDOW_MS
 FIXED_MAX_SLICE_MS = 120000
 REQUIRED_SLICE_MS_BY_N = {}
+REQUIRED_SLICE_MS_BY_N_AND_FRACTION = {}
 
 
 def _load_json(path):
@@ -48,37 +48,39 @@ def _expected_distinct_agents_no_repeat(n_agents, k):
 
 def compute_required_time_slice_ms(n_agents, target_agent_fraction):
     n = int(n_agents)
-    if n in REQUIRED_SLICE_MS_BY_N:
-        return REQUIRED_SLICE_MS_BY_N[n]
+    target_fraction = float(target_agent_fraction)
+    cache_key = (n, target_fraction)
+    if cache_key in REQUIRED_SLICE_MS_BY_N_AND_FRACTION:
+        return REQUIRED_SLICE_MS_BY_N_AND_FRACTION[cache_key]
+
+    if target_fraction <= 0.0:
+        # Keep minimum one-message behavior for degenerate targets.
+        required_msgs = 1
+        required_ms = int(np.ceil(required_msgs / FIXED_MSG_RATE_PER_MS))
+        required_ms = min(required_ms, FIXED_MAX_SLICE_MS)
+        REQUIRED_SLICE_MS_BY_N_AND_FRACTION[cache_key] = required_ms
+        return required_ms
+
+    if target_fraction >= 1.0:
+        REQUIRED_SLICE_MS_BY_N_AND_FRACTION[cache_key] = FIXED_MAX_SLICE_MS
+        return FIXED_MAX_SLICE_MS
 
     if n <= 1:
         required_msgs = 1
     else:
-        target_distinct = target_agent_fraction * n
-        max_msgs = max(1, int(np.ceil(FIXED_MAX_SLICE_MS * FIXED_MSG_RATE_PER_MS)))
-
-        if target_distinct <= 1.0:
-            required_msgs = 1
-        elif n == 2:
-            required_msgs = 2 if target_distinct > 1.0 else 1
-        else:
-            f = lambda k: float(_expected_distinct_agents_no_repeat(n, k) - target_distinct)
-            if f(1.0) >= 0.0:
-                required_msgs = 1
-            elif f(float(max_msgs)) < 0.0:
-                required_msgs = max_msgs
-            else:
-                sol = root_scalar(f, bracket=[1.0, float(max_msgs)], method='brentq')
-                required_msgs = int(np.ceil(float(sol.root)))
-
-            if required_msgs > max_msgs:
-                required_msgs = max_msgs
-            if required_msgs < 1:
-                required_msgs = 1
+        # Poisson arrivals
+        # E[distinct(t)] / n = 1 - exp(-(lambda * t) / n)
+        # Solve for t at target_fraction.
+        required_ms_cont = -(n / FIXED_MSG_RATE_PER_MS) * np.log(1.0 - target_fraction)
+        required_ms = int(np.ceil(required_ms_cont))
+        required_ms = max(1, required_ms)
+        required_ms = min(required_ms, FIXED_MAX_SLICE_MS)
+        REQUIRED_SLICE_MS_BY_N_AND_FRACTION[cache_key] = required_ms
+        return required_ms
 
     required_ms = int(np.ceil(required_msgs / FIXED_MSG_RATE_PER_MS))
     required_ms = min(required_ms, FIXED_MAX_SLICE_MS)
-    REQUIRED_SLICE_MS_BY_N[n] = required_ms
+    REQUIRED_SLICE_MS_BY_N_AND_FRACTION[cache_key] = required_ms
     return required_ms
 
 

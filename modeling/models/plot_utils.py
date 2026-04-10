@@ -166,7 +166,7 @@ def compute_eigenvalue(X, Y, neighbors, intercepts):
     A = np.vstack(q_blocks)
     y_vec = Y.reshape(-1)
 
-    print (A)
+    # print (A)
 
     if intercepts:
         A = np.hstack([A, np.ones((A.shape[0], 1), dtype=float)])
