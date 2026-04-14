@@ -183,4 +183,88 @@ def compute_eigenvalue(X, Y, neighbors, intercepts):
         'gram_full_shape': gram_full.shape,
     }
 
+def compute_mean_per_timestep(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    if y_true.ndim == 1:
+        y_true = y_true[:, None]
+    if y_pred.ndim == 1:
+        y_pred = y_pred[:, None]
+
+    mean_true = np.mean(y_true, axis=1)
+    mean_pred = np.mean(y_pred, axis=1)
+
+    return mean_true, mean_pred
+
+def compute_variance_per_timestep(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    if y_true.ndim == 1:
+        y_true = y_true[:, None]
+    if y_pred.ndim == 1:
+        y_pred = y_pred[:, None]
+
+    var_true = np.var(y_true, axis=1)
+    var_pred = np.var(y_pred, axis=1)
+
+    return var_true, var_pred
+
+def compute_wasserstein_distance_per_timestep(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    if y_true.ndim == 1:
+        y_true = y_true[:, None]
+    if y_pred.ndim == 1:
+        y_pred = y_pred[:, None]
+
+    T = min(y_true.shape[0], y_pred.shape[0])
+    wasserstein_per_timestep = np.zeros(T)
+    for t in range(T):
+        wasserstein_per_timestep[t] = wasserstein_distance(y_true[t, :], y_pred[t, :])
+
+    return wasserstein_per_timestep
+
+
+
+def plot_mean_per_timestep(mean_true, mean_pred):
+    t = np.arange(mean_true.shape[0])
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(t, mean_true, label='Observed mean', color='tab:blue', linewidth=1.5)
+    plt.plot(t, mean_pred, label='Predicted mean', color='tab:orange', linewidth=1.5)
+    plt.xlabel('time slice')
+    plt.ylabel('mean stance score')
+    plt.title('Mean stance per timestep (across agents)')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    return mean_true, mean_pred
+
+def plot_variance_per_timestep(var_true, var_pred):
+    t = np.arange(var_true.shape[0])
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(t, var_true, label='Observed variance', color='tab:blue', linewidth=1.5)
+    plt.plot(t, var_pred, label='Predicted variance', color='tab:orange', linewidth=1.5)
+    plt.xlabel('time slice')
+    plt.ylabel('variance of stance score')
+    plt.title('Variance per timestep (across agents)')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    return var_true, var_pred
+
+
+def plot_wasserstein_distance_per_timestep(wasserstein_per_timestep):
+    t_arr = np.arange(len(wasserstein_per_timestep))
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(t_arr, wasserstein_per_timestep, label='Wasserstein distance', color='tab:green', linewidth=1.5)
+    plt.xlabel('time slice')
+    plt.ylabel('Wasserstein distance')
+    plt.title('Wasserstein distance per timestep (across agents)')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    return wasserstein_per_timestep
 
