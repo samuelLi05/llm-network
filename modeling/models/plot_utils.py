@@ -128,7 +128,7 @@ def compute_wasserstein_distance(y_true, y_pred):
     return float(wasserstein_distance(y_true, y_pred))
 
 
-def compute_eigenvalue(X, Y, neighbors, intercepts):
+def compute_eigenvalue(X, Y):
     X = np.asarray(X, dtype=float)
     Y = np.asarray(Y, dtype=float)
     if X.ndim != 2 or Y.ndim != 2 or X.shape != Y.shape:
@@ -151,11 +151,6 @@ def compute_eigenvalue(X, Y, neighbors, intercepts):
     # eigenvalues of A^T A, independent of column order.
 
     # Build mask for neighbor structure over flattened W (size n^2)
-    mask = np.zeros((n, n), dtype=float)
-    for i in range(n):
-        for j in neighbors[i]:
-            mask[i, j] = 1.0
-    mask_flat = mask.reshape(-1)  # shape (n^2,)
 
     q_blocks = []
     for t in range(m):
@@ -164,24 +159,86 @@ def compute_eigenvalue(X, Y, neighbors, intercepts):
         q_blocks.append(Q_t)
 
     A = np.vstack(q_blocks)
-    y_vec = Y.reshape(-1)
-
-    # print (A)
-
-    if intercepts:
-        A = np.hstack([A, np.ones((A.shape[0], 1), dtype=float)])
 
     gram_full = A.T @ A
     eigvals_full = np.linalg.eigvalsh(gram_full)
-
-    active_cols = mask_flat != 0
-    if intercepts:
-        active_cols = np.concatenate([active_cols, [True]])
 
     return {
         'eigvals_full': eigvals_full,
         'gram_full_shape': gram_full.shape,
     }
+
+def compute_fj_eigenvalue(X, Y, lambda_1=0.3, lambda_2=0.3): # alpha defined as 1 - lambda_1 - lambda_2
+    X = np.asarray(X, dtype=float)
+    Y = np.asarray(Y, dtype=float)
+    if X.ndim != 2 or Y.ndim != 2 or X.shape != Y.shape:
+        raise ValueError('X and Y must be 2D arrays with identical shape (num_samples, n_agents)')
+
+    m, n = X.shape
+    alpha = 1.0 - lambda_1 - lambda_2
+    if alpha < 0:
+        raise ValueError('Invalid lambda parameters: lambda_1 + lambda_2 must be <= 1.0')
+
+    # Build design matrix for Friedkin-Johnsen with fixed lambda parameters.
+    # Matrix structure: [alpha * kron(I_n, z_t) | lambda2 column]
+    q_blocks = []
+    for t in range(m):
+        zt = X[t].reshape(1, -1)  # (1, n)
+        Q_t = alpha * np.kron(np.eye(n, dtype=float), zt)  # Scale by alpha
+        q_blocks.append(Q_t)
+
+    A = np.vstack(q_blocks)
+    
+    # Append lambda2 column (rightmost)
+    lambda2_col = np.full((A.shape[0], 1), lambda_2, dtype=float)
+    A = np.hstack([A, lambda2_col])
+
+    gram_full = A.T @ A
+    eigvals_full = np.linalg.eigvalsh(gram_full)
+
+    return {
+        'eigvals_full': eigvals_full,
+        'gram_full_shape': gram_full.shape,
+    }
+
+def compute_fj_joint_eigenvalue(X, Y, z0=None):
+    X = np.asarray(X, dtype=float)
+    Y = np.asarray(Y, dtype=float)
+    if X.ndim != 2 or Y.ndim != 2 or X.shape != Y.shape:
+        raise ValueError('X and Y must be 2D arrays with identical shape (num_samples, n_agents)')
+
+    m, n = X.shape
+
+    # Build design matrix for Friedkin-Johnsen joint optimization.
+    # Matrix structure: [kron(I_n, z_t) | ones column | z0 columns]
+    q_blocks = []
+    for t in range(m):
+        zt = X[t].reshape(1, -1)  # (1, n)
+        Q_t = np.kron(np.eye(n, dtype=float), zt)  # No alpha scaling here
+        q_blocks.append(Q_t)
+
+    A = np.vstack(q_blocks)
+    
+    # Append bias column (all ones)
+    ones_col = np.ones((A.shape[0], 1), dtype=float)
+    A = np.hstack([A, ones_col])
+    
+    # Append z0 columns (agent initial opinions repeated for every agent-level row)
+    if z0 is not None:
+        z0 = np.asarray(z0, dtype=float).ravel()
+        if z0.shape[0] != n:
+            raise ValueError(f'z0 must have length {n}, got {z0.shape[0]}')
+        z0_col = np.tile(z0, m).reshape(-1, 1)
+        A = np.hstack([A, z0_col])
+
+    gram_full = A.T @ A
+    eigvals_full = np.linalg.eigvalsh(gram_full)
+
+    return {
+        'eigvals_full': eigvals_full,
+        'gram_full_shape': gram_full.shape,
+    }
+
 
 def compute_mean_per_timestep(y_true, y_pred):
     y_true = np.asarray(y_true, dtype=float)

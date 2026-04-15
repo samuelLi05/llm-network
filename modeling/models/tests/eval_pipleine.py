@@ -9,7 +9,7 @@ MODELS_DIR = THIS_DIR.parent
 if str(MODELS_DIR) not in sys.path:
 	sys.path.insert(0, str(MODELS_DIR))
 
-from plot_utils import compute_eigenvalue
+from plot_utils import compute_eigenvalue, compute_fj_eigenvalue, compute_fj_joint_eigenvalue
 
 
 def random_row_stochastic_matrix(n, rng):
@@ -260,7 +260,7 @@ def test_compute_eigenvalue_full_equals_reduced_for_all_neighbors():
 	X, Y = build_transitions(W, steps=80, shock_std=0.05, rng=rng)
 	neighbors = {i: list(range(n)) for i in range(n)}
 
-	out = compute_eigenvalue(X, Y, neighbors, intercepts=False)
+	out = compute_eigenvalue(X, Y)
 
 	assert out['gram_full_shape'] == (n * n, n * n)
 	assert out['eigvals_full'].shape == (n * n,)
@@ -289,8 +289,8 @@ def test_compute_eigenvalue_min_reduced_eig_increases_with_richer_transitions():
 		rng=rng,
 	)
 
-	poor = compute_eigenvalue(X_poor, Y_poor, neighbors, intercepts=False)
-	rich = compute_eigenvalue(X_rich, Y_rich, neighbors, intercepts=False)
+	poor = compute_eigenvalue(X_poor, Y_poor)
+	rich = compute_eigenvalue(X_rich, Y_rich)
 
 	poor_min = min_positive_eigvals(poor['eigvals_full'])
 	rich_min = min_positive_eigvals(rich['eigvals_full'])
@@ -313,8 +313,8 @@ def test_compute_eigenvalue_full_is_neighbor_invariant():
 		W[i, ns] = rng.dirichlet(np.ones(len(ns)))
 
 	X, Y = build_transitions(W, steps=180, shock_std=0.08, rng=rng)
-	out_sparse = compute_eigenvalue(X, Y, neighbors, intercepts=False)
-	out_all = compute_eigenvalue(X, Y, all_neighbors, intercepts=False)
+	out_sparse = compute_eigenvalue(X, Y)
+	out_all = compute_eigenvalue(X, Y)
 
 	assert out_sparse['gram_full_shape'] == (n * n, n * n)
 	assert out_all['gram_full_shape'] == (n * n, n * n)
@@ -401,3 +401,62 @@ def test_fj_line_search_and_joint_fit_are_similar_on_synthetic_data():
 	assert l2_abs_ls_true < 0.12
 	assert l1_abs_joint_true < 0.12
 	assert l2_abs_joint_true < 0.12
+
+
+def test_compute_eigenvalue_on_fj_fit():
+	rng = np.random.default_rng(303)
+	n = 8
+	steps_per_trajectory = 80
+
+	true_lambda1 = 0.2
+	true_lambda2 = 0.3
+	true_b = -0.15
+	noise_std = 0.08
+	x0_prior = rng.uniform(-0.8, 0.8, size=n)
+
+	_, run_traj_rich, _ = build_synthetic_fj_runs(
+		rng=rng,
+		n=n,
+		n_runs=8,
+		horizon=steps_per_trajectory,
+		neighbors={i: list(range(n)) for i in range(n)},
+		lambda1=true_lambda1,
+		lambda2=true_lambda2,
+		b=true_b,
+		x0_prior=x0_prior,
+		noise_std=noise_std,
+	)
+
+	rich_run_names = sorted(run_traj_rich.keys())
+	run_traj_poor = {rn: run_traj_rich[rn] for rn in rich_run_names[:2]}
+
+	X_poor_blocks, Y_poor_blocks = [], []
+	for rn in sorted(run_traj_poor.keys()):
+		X_i, Y_i = build_dataset_from_run(np.asarray(run_traj_poor[rn], dtype=float))
+		X_poor_blocks.append(X_i)
+		Y_poor_blocks.append(Y_i)
+	X_poor = np.vstack(X_poor_blocks)
+	Y_poor = np.vstack(Y_poor_blocks)
+
+	X_rich_blocks, Y_rich_blocks = [], []
+	for rn in sorted(run_traj_rich.keys()):
+		X_i, Y_i = build_dataset_from_run(np.asarray(run_traj_rich[rn], dtype=float))
+		X_rich_blocks.append(X_i)
+		Y_rich_blocks.append(Y_i)
+	X_rich = np.vstack(X_rich_blocks)
+	Y_rich = np.vstack(Y_rich_blocks)
+
+	out_fj_poor = compute_fj_eigenvalue(X_poor, Y_poor, lambda_1=true_lambda1, lambda_2=true_lambda2)
+	out_fj_rich = compute_fj_eigenvalue(X_rich, Y_rich, lambda_1=true_lambda1, lambda_2=true_lambda2)
+
+	out_joint_poor = compute_fj_joint_eigenvalue(X_poor, Y_poor, z0=x0_prior)
+	out_joint_rich = compute_fj_joint_eigenvalue(X_rich, Y_rich, z0=x0_prior)
+
+	min_fj_poor = min_positive_eigvals(out_fj_poor['eigvals_full'])
+	min_fj_rich = min_positive_eigvals(out_fj_rich['eigvals_full'])
+	min_joint_poor = min_positive_eigvals(out_joint_poor['eigvals_full'])
+	min_joint_rich = min_positive_eigvals(out_joint_rich['eigvals_full'])
+
+	# Richer independent trajectories should increase the minimum positive eigenvalue.
+	assert min_fj_rich > min_fj_poor
+	assert min_joint_rich > min_joint_poor
