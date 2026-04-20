@@ -12,3 +12,4 @@ modeling/cleaned_data/
 run_network.sh
 .DS_Store
 init_conditions/
+*.png
