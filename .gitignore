@@ -13,3 +13,6 @@ run_network.sh
 .DS_Store
 init_conditions/
 *.png
+graphs/
+debate_topics/
+.DS_Store
