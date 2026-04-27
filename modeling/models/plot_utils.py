@@ -325,3 +325,201 @@ def plot_wasserstein_distance_per_timestep(wasserstein_per_timestep):
     plt.show()
     return wasserstein_per_timestep
 
+def plot_box_per_timestep(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    
+    if y_true.ndim == 1:
+        y_true = y_true[:, None]
+    if y_pred.ndim == 1:
+        y_pred = y_pred[:, None]
+    
+    T = min(y_true.shape[0], y_pred.shape[0])
+    
+    fig, ax = plt.subplots(figsize=(14, 6))
+    
+    positions_obs = []
+    positions_pred = []
+    data_obs = []
+    data_pred = []
+    
+    box_width = 0.35
+    for t in range(T):
+        pos_obs = 2 * t
+        pos_pred = 2 * t + box_width + 0.1
+        
+        positions_obs.append(pos_obs)
+        positions_pred.append(pos_pred)
+        data_obs.append(y_true[t, :])
+        data_pred.append(y_pred[t, :])
+    
+    bp_obs = ax.boxplot(
+        data_obs,
+        positions=positions_obs,
+        widths=box_width,
+        patch_artist=True,
+        labels=[f't={t}' for t in range(T)],
+    )
+    bp_pred = ax.boxplot(
+        data_pred,
+        positions=positions_pred,
+        widths=box_width,
+        patch_artist=True,
+        labels=['' for t in range(T)],
+    )
+    
+    for patch in bp_obs['boxes']:
+        patch.set_facecolor('tab:blue')
+        patch.set_alpha(0.6)
+    for patch in bp_pred['boxes']:
+        patch.set_facecolor('tab:orange')
+        patch.set_alpha(0.6)
+    
+    ax.set_xlabel('time slice')
+    ax.set_ylabel('stance score')
+    ax.set_title('Agent stance distribution per timestep (observed vs predicted)')
+    
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='tab:blue', alpha=0.6, label='Observed'),
+        Patch(facecolor='tab:orange', alpha=0.6, label='Predicted'),
+    ]
+    ax.legend(handles=legend_elements, loc='upper right')
+    
+    plt.tight_layout()
+    plt.show()
+    return bp_obs, bp_pred
+
+
+def plot_violin_per_timestep(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    
+    if y_true.ndim == 1:
+        y_true = y_true[:, None]
+    if y_pred.ndim == 1:
+        y_pred = y_pred[:, None]
+    
+    T = min(y_true.shape[0], y_pred.shape[0])
+    
+    fig, ax = plt.subplots(figsize=(14, 6))
+    
+    positions_obs = []
+    positions_pred = []
+    data_obs = []
+    data_pred = []
+    
+    for t in range(T):
+        pos_obs = 2 * t
+        pos_pred = 2 * t + 1
+        
+        positions_obs.append(pos_obs)
+        positions_pred.append(pos_pred)
+        data_obs.append(y_true[t, :])
+        data_pred.append(y_pred[t, :])
+    
+    vp_obs = ax.violinplot(data_obs, positions=positions_obs, widths=0.7, showmeans=True)
+    vp_pred = ax.violinplot(data_pred, positions=positions_pred, widths=0.7, showmeans=True)
+    
+    for pc in vp_obs['bodies']:
+        pc.set_facecolor('tab:blue')
+        pc.set_alpha(0.6)
+    for pc in vp_pred['bodies']:
+        pc.set_facecolor('tab:orange')
+        pc.set_alpha(0.6)
+    
+    ax.set_xticks([2 * t + 0.5 for t in range(T)])
+    ax.set_xticklabels([f't={t}' for t in range(T)])
+    ax.set_xlabel('time slice')
+    ax.set_ylabel('stance score')
+    ax.set_title('Agent stance distribution per timestep (violin plot: observed vs predicted)')
+    
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='tab:blue', alpha=0.6, label='Observed'),
+        Patch(facecolor='tab:orange', alpha=0.6, label='Predicted'),
+    ]
+    ax.legend(handles=legend_elements, loc='upper right')
+    
+    plt.tight_layout()
+    plt.show()
+    return vp_obs, vp_pred
+
+
+def compute_max_prediction_error(y_true, y_pred, num_params=1):
+    y_true = np.asarray(y_true, dtype=float).ravel()
+    y_pred = np.asarray(y_pred, dtype=float).ravel()
+    
+    if y_true.shape != y_pred.shape:
+        raise ValueError('y_true and y_pred must have the same shape')
+    if y_true.size == 0:
+        return {
+            'max_error': np.nan,
+            'aic': np.nan,
+            'bic': np.nan,
+            'sse': np.nan,
+            'n_obs': 0,
+        }
+    
+    errors = np.abs(y_true - y_pred)
+    max_error = float(np.max(errors))
+    emax2 = float(max_error ** 2)
+    
+    sse = float(np.sum((y_true - y_pred) ** 2))
+    n = len(y_true)
+
+    if emax2 > 0:
+        # Max-criterion AIC/BIC: treat Emax^2 as the typical variance proxy.
+        aic = 2.0 * float(num_params) + n * np.log(emax2)
+        bic = float(num_params) * np.log(n) + n * np.log(emax2)
+    else:
+        # Perfect fit implies variance proxy -> 0.
+        aic = -np.inf
+        bic = -np.inf
+    
+    return {
+        'max_error': max_error,
+        'aic': float(aic),
+        'bic': float(bic),
+        'sse': sse,
+        'emax2': emax2,
+        'n_obs': int(n),
+    }
+
+
+def compute_mean_prediction_error(y_true, y_pred, num_params=1):
+    y_true = np.asarray(y_true, dtype=float).ravel()
+    y_pred = np.asarray(y_pred, dtype=float).ravel()
+    
+    if y_true.shape != y_pred.shape:
+        raise ValueError('y_true and y_pred must have the same shape')
+    if y_true.size == 0:
+        return {
+            'mean_error': np.nan,
+            'aic': np.nan,
+            'bic': np.nan,
+            'sse': np.nan,
+            'n_obs': 0,
+        }
+    
+    errors = np.abs(y_true - y_pred)
+    mean_error = float(np.mean(errors))
+    
+    sse = float(np.sum((y_true - y_pred) ** 2))
+    n = len(y_true)
+
+    if sse > 0:
+        aic = 2.0 * float(num_params) + n * np.log(sse / n)
+        bic = float(num_params) * np.log(n) + n * np.log(sse / n)
+    else:
+        aic = -np.inf
+        bic = -np.inf
+    
+    return {
+        'mean_error': mean_error,
+        'aic': float(aic),
+        'bic': float(bic),
+        'sse': sse,
+        'n_obs': int(n),
+    }
+
