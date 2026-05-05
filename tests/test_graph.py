@@ -8,16 +8,15 @@ import networkx as nx
 
 NUM_AGENTS = 30
 
-def test_graph_construction():
+def test_graph_construction(num_agents=NUM_AGENTS, seed=42, graph_type="erdos-renyi"):
     # Create num agents agents
-    agents = [f"agent_{i}" for i in range(NUM_AGENTS)]
+    agents = [f"agent_{i}" for i in range(num_agents)]
     
     # Build community graph
     cg = ConnectionGraph(
         agents,
-        seed=42,
-        graph_type="community",
-        avg_degree_target=6.0,  # density knob (not an exact constraint)
+        seed=seed,
+        graph_type=graph_type,
         base_in_social_needs=0.5,
         base_out_social_needs=2.0,
         lognormal_mu=1.0,
@@ -59,7 +58,7 @@ def test_graph_construction():
                 in_degrees[dst] += 1
     avg_out = sum(out_degrees.values()) / len(out_degrees)
     avg_in = sum(in_degrees.values()) / len(in_degrees)
-    print(f"Avg out-degree: {avg_out:.2f} (target: {cg.avg_degree_target})")
+    print(f"Avg out-degree: {avg_out:.2f}")
     print(f"Avg in-degree:  {avg_in:.2f}")
     print(f"Out-degree range: {min(out_degrees.values())} - {max(out_degrees.values())}")
     print(f"In-degree range:  {min(in_degrees.values())} - {max(in_degrees.values())}")
@@ -106,7 +105,42 @@ def test_graph_construction():
     # Visualize
     visualize_graph(cg, agents, group_of)
 
-def visualize_graph(cg, agents, group_of):
+
+def test_erdos_renyi_graph_construction():
+    agents = [f"agent_{i}" for i in range(NUM_AGENTS)]
+
+    cg = ConnectionGraph(
+        agents,
+        seed=42,
+        graph_type="erdos-renyi",
+        avg_degree_target=6.0,
+    )
+
+    graph = cg.get_graph()
+    nx_graph = cg.to_networkx()
+
+    out_degrees = {a: len(graph[a]) for a in agents}
+    in_degrees = {a: 0 for a in agents}
+    for src, nbrs in graph.items():
+        for dst in nbrs:
+            if dst in in_degrees:
+                in_degrees[dst] += 1
+
+    avg_out = sum(out_degrees.values()) / len(out_degrees)
+    avg_in = sum(in_degrees.values()) / len(in_degrees)
+
+    assert nx.is_strongly_connected(nx_graph)
+    assert 5.0 <= avg_out <= 7.0
+    assert abs(avg_out - avg_in) < 1e-9
+    assert all(deg >= 1 for deg in out_degrees.values())
+
+    print(f"=== Erd\"os-R\"enyi Graph Test ({NUM_AGENTS} Agents) ===")
+    print(f"Avg out-degree: {avg_out:.2f}")
+    print(f"Avg in-degree:  {avg_in:.2f}")
+    print(f"Out-degree range: {min(out_degrees.values())} - {max(out_degrees.values())}")
+    print(f"In-degree range:  {min(in_degrees.values())} - {max(in_degrees.values())}")
+
+def visualize_graph(cg, agents, group_of, save_path=None, show=True):
     # Convert to NetworkX
     G = cg.to_networkx()
     
@@ -126,7 +160,7 @@ def visualize_graph(cg, agents, group_of):
     pos = nx.spring_layout(G, seed=42)
     
     plt.figure(figsize=(12, 8))
-    draw_labels = len(G.nodes()) <= 40
+    draw_labels = len(G.nodes()) <= 10
 
     nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=node_sizes, alpha=0.9)
     nx.draw_networkx_edges(
@@ -156,7 +190,58 @@ def visualize_graph(cg, agents, group_of):
     plt.title(title)
     plt.axis('off')
     plt.tight_layout()
-    plt.show()
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=200, bbox_inches='tight')
+    if show:
+        plt.show()
+    plt.close()
+
+def test_and_save_grpah():
+    plots_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'plots'))
+    os.makedirs(plots_dir, exist_ok=True)
+
+    for agent_size in [30, 60]:
+        agents = [f"agent_{i}" for i in range(agent_size)]
+        for graph_type in ["community", "erdos-renyi", "chung-lu"]:
+            for i in range(5):
+                seed = 42 + i
+                cg = ConnectionGraph(
+                    agents,
+                    seed=seed,
+                    graph_type=graph_type,
+                    avg_degree_target=6.0,
+                    base_in_social_needs=0.5,
+                    base_out_social_needs=2.0,
+                    lognormal_mu=1.0,
+                    lognormal_sigma=1.0,
+                    activity_lognormal_mu=1.0,
+                    activity_lognormal_sigma=1.8,
+                    group_divisor=5,
+                    within_group_fraction=0.85,
+                    cross_group_divisor=5.0,
+                    reciprocity_within=0.4,
+                    reciprocity_cross=0.05,
+                    reciprocity_influencer=0.0,
+                    influencer_quantile=0.9,
+                    min_out_degree=2,
+                    min_in_degree=1,
+                )
+
+                group_of = getattr(cg, "_group_of", {})
+
+                if graph_type == "community":
+                    fname = f"SBM_{agent_size}_run_{i+1}.png"
+                elif graph_type == "erdos-renyi":
+                    fname = f"erdos_renyi_{agent_size}_run_{i+1}.png"
+                else:
+                    fname = f"chung_lu_{agent_size}_run_{i+1}.png"
+
+                save_path = os.path.join(plots_dir, fname)
+                visualize_graph(cg, agents, group_of, save_path=save_path, show=False)
+                print(f"Saved graph plot: {save_path}")
 
 if __name__ == "__main__":
     test_graph_construction()
+    test_erdos_renyi_graph_construction()
+    test_and_save_grpah()

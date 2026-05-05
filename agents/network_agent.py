@@ -424,10 +424,10 @@ class NetworkAgent:
         ):
             sender_id = message_data.get('sender_id')
             if sender_id == self.id:
-                # Ignore own messages
-                # console_logger.info(f"Agent {self.id} ignored its own message {message_id}.")
-                await asyncio.sleep(0.1)
-                continue
+                # Allow self-messages only when this agent is designated next responder.
+                if not self.order_manager or not await asyncio.to_thread(self.order_manager.is_my_turn, self.id):
+                    await asyncio.sleep(0.1)
+                    continue
 
             # Check if this agent is the designated responder (OrderManager logic).
             if self.order_manager:
@@ -510,7 +510,7 @@ class NetworkAgent:
 
             # Designate the next responder BEFORE publishing the message
             if self.order_manager:
-                next_responder = await self.order_manager.select_and_store_next_responder(exclude_agent_id=self.id)
+                next_responder = await self.order_manager.select_and_store_next_responder()
                 console_logger.info(f"Agent {self.id} designating next responder: {next_responder}")
 
             # Now publish the message (other agents will see the designated responder)

@@ -31,7 +31,7 @@ NUM_AGENTS = 30
 STREAM_NAME = "agent_stream"
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
-RUN_DURATION_SECONDS = 7200 # 3 hours
+RUN_DURATION_SECONDS = 2400 # 3 hours
 USE_LOCAL_LLM = True
 ENABLE_STANCE_WORKER = False
 STANCE_BATCH_SIZE = 5
@@ -55,18 +55,20 @@ STARTUP_CONCURRENCY = 25
 
 # Stance statement for intializeing with a baseline stance
 USE_BASELINE_STATEMENT = True
-BASELINE_STATEMENT = "Vaccines cause autism"
-BASELINE_TOPIC = "vaccine safety and autism"
+BASELINE_STATEMENT = "Gun ownership is a fundamental right."
+BASELINE_TOPIC = "Gun Control"
 
 # Seed for assigning baseline stances to agents
 BASELINE_ASSIGNMENT_SEED = 1234
 
 # Vary initial stance distribution across runs (no env vars).
-# Options: "uniform" | "bimodal_polarized" | "moderate_centered" | "skew_pro" | "skew_anti"
+# Training options: "uniform" | "bimodal_polarized" | "moderate_centered" | "skew_pro" | "skew_anti"
+# Held-out test options: "test_consensus_pro" | "test_consensus_anti" | "test_center_extremes" | "test_hollow_center"
 INITIAL_CONDITION_MODE = os.getenv("INITIAL_CONDITION_MODE", "uniform")
 # Separate seed for sampling stance weights within a mode (lets you run multiple replicates).
 INITIAL_CONDITION_SEED = int(os.getenv("INITIAL_CONDITION_SEED", "1234"))
-# Connection graph, define the size of the random hamiltonian graph
+# Connection graph selection and seed.
+GRAPH_TYPE = os.getenv("GRAPH_TYPE", "community").strip().lower()
 GRAPH_SEED = 42
 GRAPH_MIN_DEGREE = 8
 
@@ -134,7 +136,17 @@ async def main():
             weights: list[float],
         ) -> list[float]:
             """Return length-n list of stance weights based on a named initial-condition mode."""
-            if mode not in {"uniform", "bimodal_polarized", "moderate_centered", "skew_pro", "skew_anti"}:
+            if mode not in {
+                "uniform",
+                "bimodal_polarized",
+                "moderate_centered",
+                "skew_pro",
+                "skew_anti",
+                "test_consensus_pro",
+                "test_consensus_anti",
+                "test_center_extremes",
+                "test_hollow_center",
+            }:
                 raise ValueError(f"Unknown INITIAL_CONDITION_MODE: {mode}")
 
             if weights != [-1.0, -0.5, 0.0, 0.5, 1.0]:
@@ -150,6 +162,18 @@ async def main():
                 probs = [0.05, 0.225, 0.45, 0.225, 0.05]
             elif mode == "skew_pro":
                 probs = [0.10, 0.10, 0.20, 0.25, 0.35]
+            elif mode == "test_consensus_pro":
+                # Most agents lean strongly pro with minimal opposition.
+                probs = [0.02, 0.03, 0.10, 0.30, 0.55]
+            elif mode == "test_consensus_anti":
+                # Most agents lean strongly anti with minimal support.
+                probs = [0.55, 0.30, 0.10, 0.03, 0.02]
+            elif mode == "test_center_extremes":
+                # Mixture of centrists and strong extremes, little in-between.
+                probs = [0.25, 0.05, 0.40, 0.05, 0.25]
+            elif mode == "test_hollow_center":
+                # Mid-intensity camps dominate while neutral is rare.
+                probs = [0.10, 0.40, 0.02, 0.40, 0.08]
             else:  # skew_anti
                 probs = [0.35, 0.25, 0.20, 0.10, 0.10]
 
@@ -340,7 +364,7 @@ async def main():
             else:
                 pass
                 # seed_texts.extend(
-                #     [
+                #    
                 #         ("pro", f"Enough dithering. {topic} is non-negotiable — we should expand it now."),
                 #         ("pro", f"If you're against {topic}, you're choosing stagnation. Push it through."),
                 #         ("anti", f"Wake up: {topic} is a harmful mistake. Stop pretending it's 'progress'."),
@@ -438,8 +462,8 @@ async def main():
     agent_ids = [a.id for a in agents]
     graph = ConnectionGraph(
         agent_ids,
-        seed=42,
-        graph_type="community",
+        seed=int(os.getenv("GRAPH_SEED", GRAPH_SEED)),
+        graph_type=GRAPH_TYPE,
         avg_degree_target=6.0,  # density knob (not an exact constraint)
         base_in_social_needs=0.5,
         base_out_social_needs=2.0,
@@ -459,7 +483,7 @@ async def main():
     ).get_graph()
     avg_degree = (sum(len(v) for v in graph.values()) / max(1, len(graph)))
     console_logger.info(
-        f"Connection graph built: n={len(agent_ids)} avg_degree="
+        f"Connection graph built: type={GRAPH_TYPE} n={len(agent_ids)} avg_degree="
         f"{avg_degree:.2f}"
     )
 

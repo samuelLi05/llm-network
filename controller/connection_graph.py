@@ -10,7 +10,6 @@ Requirements:
 from __future__ import annotations
 
 import random
-from collections import deque
 from typing import Optional
 import networkx as nx
 
@@ -23,7 +22,7 @@ class ConnectionGraph:
         seed: Optional[int] = None,
         include_self_loops: bool = False,
         graph_type: str = "community",
-        avg_degree_target: float = 6.0,
+        avg_degree_target: float = 7.0,
         lognormal_mu: float = 1.0,
         lognormal_sigma: float = 10.0,
         activity_lognormal_mu: Optional[float] = None,
@@ -46,7 +45,7 @@ class ConnectionGraph:
             agents: Agent ids.
             seed: RNG seed for reproducibility.
             include_self_loops: If True, allow a node to connect to itself (default False).
-            graph_type: Type of graph structure to build ("hamiltonian", "chung-lu", "community").
+            graph_type: Type of graph structure to build ("hamiltonian", "chung-lu", "community", "erdos-renyi").
             avg_degree_target: Target average out-degree.
             lognormal_mu: LogNormal(mu, sigma) location parameter for the "spark".
             lognormal_sigma: LogNormal(mu, sigma) scale parameter for the "spark".
@@ -165,10 +164,12 @@ class ConnectionGraph:
             self._add_directed_chung_lu_edges(out_graph)
         elif self.graph_type == "community":
             self._add_directed_community_edges(out_graph)
+        elif self.graph_type == "erdos-renyi":
+            self._add_directed_erdos_renyi_edges(out_graph)
         else:
             raise ValueError(
                 f"Unsupported graph_type for directed graph: {self.graph_type!r}. "
-                "Use 'hamiltonian', 'chung-lu', or 'community'."
+                "Use 'hamiltonian', 'chung-lu', 'community', or 'erdos-renyi'."
             )
 
         return {k: sorted(v) for k, v in out_graph.items()}
@@ -269,6 +270,37 @@ class ConnectionGraph:
                 mult = within_mult if same else cross_mult
                 p = ((wout * win) / sum_in) * mult
                 if p >= 1.0 or self._rng.random() < p:
+                    self._add_directed_edge(out_graph, src, dst)
+
+    def _add_directed_erdos_renyi_edges(self, out_graph: dict[str, set[str]]) -> None:
+        """Add random directed edges with an average-degree target.
+
+        The Hamiltonian cycle already contributes one outgoing edge per node,
+        so the extra-edge probability is chosen to make the final average
+        out-degree close to ``avg_degree_target``.
+        """
+        agents = self.agents
+        n = len(agents)
+        if n <= 1:
+            return
+
+        possible_extra_per_node = n - 2 if not self.include_self_loops else n - 1
+        if possible_extra_per_node <= 0:
+            return
+
+        target = max(0.0, float(self.avg_degree_target))
+        if target <= 1.0:
+            edge_probability = 0.0
+        else:
+            edge_probability = min(1.0, (target - 1.0) / possible_extra_per_node)
+
+        for src in agents:
+            for dst in agents:
+                if (not self.include_self_loops) and src == dst:
+                    continue
+                if dst in out_graph[src]:
+                    continue
+                if self._rng.random() < edge_probability:
                     self._add_directed_edge(out_graph, src, dst)
 
 

@@ -108,10 +108,7 @@ class OrderManager:
         if not self.agents:
             raise ValueError("No agents available")
 
-        candidates = [a for a in self.agents if a.id != exclude_agent_id]
-        if not candidates:
-            # If exclusion removes everyone, fall back to all agents
-            candidates = self.agents
+        candidates = list(self.agents)
 
         chosen = random.choice(candidates)
         return chosen.id
@@ -159,9 +156,9 @@ class OrderManager:
 
         # Hard fallback if we can't do topology
         if self.profile_store is None or not self.agents:
-            return self.get_random_agent(exclude_agent_id=exclude_agent_id)
+            return self.get_random_agent()
 
-        candidates = [a for a in self.agents if a.id != exclude_agent_id]
+        candidates = list(self.agents)
         if candidate_agent_ids is not None:
             candidates = [a for a in candidates if a.id in candidate_agent_ids]
         if not candidates:
