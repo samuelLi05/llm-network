@@ -7,11 +7,11 @@ import hashlib
 import time
 from typing import Optional, TYPE_CHECKING
 from dotenv import load_dotenv
-from openai import OpenAI
 from network.stream import RedisStream
 from agents.local_llm import HuggingFaceLLM as LocalLLM
 from agents.llm_service import LLMService
-
+from agents import llm_config
+from openai import OpenAI
 from controller.stance_analysis.agent_profile_store import AgentProfileStore
 from controller.stance_analysis.rolling_embedding_store import RollingEmbeddingStore
 from controller.stance_analysis.network_topology import NetworkTopologyTracker
@@ -25,9 +25,6 @@ if TYPE_CHECKING:
     from logs.logger import Logger
 
 load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
-
 
 class NetworkAgent:
     """An agent that listens to a Redis stream, generates responses, and publishes back.
@@ -352,17 +349,21 @@ class NetworkAgent:
 
     async def _generate_from_messages(self, messages: list[dict]) -> str:
         if not self.local_llm and not self.llm_service:
+            client = llm_config.ACTIVE_OPENAI_CLIENT
+            model = llm_config.ACTIVE_OPENAI_MODEL
+            if client is None or model is None:
+                raise RuntimeError("LLM client is not initialized. Call llm_config.initialize_active_client() first.")
             response_obj = await asyncio.wait_for(
                 asyncio.to_thread(
-                    client.responses.create,
-                    model="gpt-4o-mini",
-                    input=messages,
+                    client.chat.completions.create,
+                    model=model,
+                    messages=messages,
                     temperature=0.7,
-                    max_output_tokens=300,
+                    max_tokens=300,
                 ),
                 timeout=60,
             )
-            return getattr(response_obj, "output_text", None) or str(response_obj)
+            return response_obj.choices[0].message.content
 
         if self.llm_service:
             return await self.llm_service.generate(

@@ -153,8 +153,8 @@ def visualize_graph(cg, agents, group_of, save_path=None, show=True):
     node_colors = [group_colors.get(node, 'black') for node in G.nodes()]
     
     # Node sizes by in-degree (influence)
-    in_degrees = dict(G.in_degree()) if G.is_directed() else dict(G.degree())
-    node_sizes = [150 + 60 * in_degrees.get(node, 0) for node in G.nodes()]
+    out_degrees = dict(G.out_degree()) if G.is_directed() else dict(G.degree())
+    node_sizes = [150 + 60 * out_degrees.get(node, 0) for node in G.nodes()]
     
     # Layout
     pos = nx.spring_layout(G, seed=42)

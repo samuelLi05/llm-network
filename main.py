@@ -10,6 +10,7 @@ import os
 import random
 import time
 from agents.network_agent import NetworkAgent
+from agents import llm_config
 from agents.llm_service import LLMService
 from agents.local_llm import HuggingFaceLLM
 from agents.prompt_configs.generate_prompt import PromptGenerator
@@ -31,8 +32,15 @@ NUM_AGENTS = 30
 STREAM_NAME = "agent_stream"
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
-RUN_DURATION_SECONDS = 2400 # 3 hours
-USE_LOCAL_LLM = True
+RUN_DURATION_SECONDS = 1200 # 3 hours
+USE_LOCAL_LLM = False
+# Manually edit these globals to switch between a local Ollama endpoint and the OpenAI API.
+LLM_API_BACKEND = "ollama"
+OPENAI_MODEL = "gpt-4o-mini"
+OPENAI_BASE_URL = None
+OLLAMA_MODEL = "llama3.1:8b"
+OLLAMA_BASE_URL = "http://localhost:11434/v1"
+OLLAMA_API_KEY = "ollama"
 ENABLE_STANCE_WORKER = False
 STANCE_BATCH_SIZE = 5
 STANCE_BATCH_INTERVAL = 30
@@ -55,8 +63,8 @@ STARTUP_CONCURRENCY = 25
 
 # Stance statement for intializeing with a baseline stance
 USE_BASELINE_STATEMENT = True
-BASELINE_STATEMENT = "Gun ownership is a fundamental right."
-BASELINE_TOPIC = "Gun Control"
+BASELINE_STATEMENT = "Vaccines cause austim"
+BASELINE_TOPIC = "Vaccine safety and autism"
 
 # Seed for assigning baseline stances to agents
 BASELINE_ASSIGNMENT_SEED = 1234
@@ -109,6 +117,18 @@ async def main():
     console_logger.info("Starting LLM Network...")
 
     llm_service = None
+    local_llm = None
+
+    llm_config.initialize_active_client(
+        llm_api_backend=LLM_API_BACKEND,
+        openai_model=OPENAI_MODEL,
+        openai_base_url=OPENAI_BASE_URL,
+        ollama_model=OLLAMA_MODEL,
+        ollama_base_url=OLLAMA_BASE_URL,
+        ollama_api_key=OLLAMA_API_KEY,
+        openai_api_key=os.getenv("OPENAI_API_KEY"),
+    )
+
     if USE_LOCAL_LLM:
         console_logger.info("Using local LLM service (quantized HF model).")
         local_llm = HuggingFaceLLM()
