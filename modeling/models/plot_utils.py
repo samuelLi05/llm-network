@@ -128,7 +128,7 @@ def compute_wasserstein_distance(y_true, y_pred):
     return float(wasserstein_distance(y_true, y_pred))
 
 
-def compute_eigenvalue(X, Y, neighbors, intercepts):
+def compute_eigenvalue(X, Y):
     X = np.asarray(X, dtype=float)
     Y = np.asarray(Y, dtype=float)
     if X.ndim != 2 or Y.ndim != 2 or X.shape != Y.shape:
@@ -151,11 +151,6 @@ def compute_eigenvalue(X, Y, neighbors, intercepts):
     # eigenvalues of A^T A, independent of column order.
 
     # Build mask for neighbor structure over flattened W (size n^2)
-    mask = np.zeros((n, n), dtype=float)
-    for i in range(n):
-        for j in neighbors[i]:
-            mask[i, j] = 1.0
-    mask_flat = mask.reshape(-1)  # shape (n^2,)
 
     q_blocks = []
     for t in range(m):
@@ -164,23 +159,367 @@ def compute_eigenvalue(X, Y, neighbors, intercepts):
         q_blocks.append(Q_t)
 
     A = np.vstack(q_blocks)
-    y_vec = Y.reshape(-1)
-
-    # print (A)
-
-    if intercepts:
-        A = np.hstack([A, np.ones((A.shape[0], 1), dtype=float)])
 
     gram_full = A.T @ A
     eigvals_full = np.linalg.eigvalsh(gram_full)
-
-    active_cols = mask_flat != 0
-    if intercepts:
-        active_cols = np.concatenate([active_cols, [True]])
 
     return {
         'eigvals_full': eigvals_full,
         'gram_full_shape': gram_full.shape,
     }
 
+def compute_fj_eigenvalue(X, Y, lambda_1=0.3, lambda_2=0.3): # alpha defined as 1 - lambda_1 - lambda_2
+    X = np.asarray(X, dtype=float)
+    Y = np.asarray(Y, dtype=float)
+    if X.ndim != 2 or Y.ndim != 2 or X.shape != Y.shape:
+        raise ValueError('X and Y must be 2D arrays with identical shape (num_samples, n_agents)')
+
+    m, n = X.shape
+    alpha = 1.0 - lambda_1 - lambda_2
+    if alpha < 0:
+        raise ValueError('Invalid lambda parameters: lambda_1 + lambda_2 must be <= 1.0')
+
+    # Build design matrix for Friedkin-Johnsen with fixed lambda parameters.
+    # Matrix structure: [alpha * kron(I_n, z_t) | lambda2 column]
+    q_blocks = []
+    for t in range(m):
+        zt = X[t].reshape(1, -1)  # (1, n)
+        Q_t = alpha * np.kron(np.eye(n, dtype=float), zt)  # Scale by alpha
+        q_blocks.append(Q_t)
+
+    A = np.vstack(q_blocks)
+    
+    # Append lambda2 column (rightmost)
+    lambda2_col = np.full((A.shape[0], 1), lambda_2, dtype=float)
+    A = np.hstack([A, lambda2_col])
+
+    gram_full = A.T @ A
+    eigvals_full = np.linalg.eigvalsh(gram_full)
+
+    return {
+        'eigvals_full': eigvals_full,
+        'gram_full_shape': gram_full.shape,
+    }
+
+def compute_fj_joint_eigenvalue(X, Y, z0=None):
+    X = np.asarray(X, dtype=float)
+    Y = np.asarray(Y, dtype=float)
+    if X.ndim != 2 or Y.ndim != 2 or X.shape != Y.shape:
+        raise ValueError('X and Y must be 2D arrays with identical shape (num_samples, n_agents)')
+
+    m, n = X.shape
+
+    # Build design matrix for Friedkin-Johnsen joint optimization.
+    # Matrix structure: [kron(I_n, z_t) | ones column | z0 columns]
+    q_blocks = []
+    for t in range(m):
+        zt = X[t].reshape(1, -1)  # (1, n)
+        Q_t = np.kron(np.eye(n, dtype=float), zt)  # No alpha scaling here
+        q_blocks.append(Q_t)
+
+    A = np.vstack(q_blocks)
+    
+    # Append bias column (all ones)
+    ones_col = np.ones((A.shape[0], 1), dtype=float)
+    A = np.hstack([A, ones_col])
+    
+    # Append z0 columns (agent initial opinions repeated for every agent-level row)
+    if z0 is not None:
+        z0 = np.asarray(z0, dtype=float).ravel()
+        if z0.shape[0] != n:
+            raise ValueError(f'z0 must have length {n}, got {z0.shape[0]}')
+        z0_col = np.tile(z0, m).reshape(-1, 1)
+        A = np.hstack([A, z0_col])
+
+    gram_full = A.T @ A
+    eigvals_full = np.linalg.eigvalsh(gram_full)
+
+    return {
+        'eigvals_full': eigvals_full,
+        'gram_full_shape': gram_full.shape,
+    }
+
+
+def compute_mean_per_timestep(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    if y_true.ndim == 1:
+        y_true = y_true[:, None]
+    if y_pred.ndim == 1:
+        y_pred = y_pred[:, None]
+
+    mean_true = np.mean(y_true, axis=1)
+    mean_pred = np.mean(y_pred, axis=1)
+
+    return mean_true, mean_pred
+
+def compute_variance_per_timestep(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    if y_true.ndim == 1:
+        y_true = y_true[:, None]
+    if y_pred.ndim == 1:
+        y_pred = y_pred[:, None]
+
+    var_true = np.var(y_true, axis=1)
+    var_pred = np.var(y_pred, axis=1)
+
+    return var_true, var_pred
+
+def compute_wasserstein_distance_per_timestep(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    if y_true.ndim == 1:
+        y_true = y_true[:, None]
+    if y_pred.ndim == 1:
+        y_pred = y_pred[:, None]
+
+    T = min(y_true.shape[0], y_pred.shape[0])
+    wasserstein_per_timestep = np.zeros(T)
+    for t in range(T):
+        wasserstein_per_timestep[t] = wasserstein_distance(y_true[t, :], y_pred[t, :])
+
+    return wasserstein_per_timestep
+
+
+
+def plot_mean_per_timestep(mean_true, mean_pred):
+    t = np.arange(mean_true.shape[0])
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(t, mean_true, label='Observed mean', color='tab:blue', linewidth=1.5)
+    plt.plot(t, mean_pred, label='Predicted mean', color='tab:orange', linewidth=1.5)
+    plt.xlabel('time slice')
+    plt.ylabel('mean stance score')
+    plt.title('Mean stance per timestep (across agents)')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    return mean_true, mean_pred
+
+def plot_variance_per_timestep(var_true, var_pred):
+    t = np.arange(var_true.shape[0])
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(t, var_true, label='Observed variance', color='tab:blue', linewidth=1.5)
+    plt.plot(t, var_pred, label='Predicted variance', color='tab:orange', linewidth=1.5)
+    plt.xlabel('time slice')
+    plt.ylabel('variance of stance score')
+    plt.title('Variance per timestep (across agents)')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    return var_true, var_pred
+
+
+def plot_wasserstein_distance_per_timestep(wasserstein_per_timestep):
+    t_arr = np.arange(len(wasserstein_per_timestep))
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(t_arr, wasserstein_per_timestep, label='Wasserstein distance', color='tab:green', linewidth=1.5)
+    plt.xlabel('time slice')
+    plt.ylabel('Wasserstein distance')
+    plt.title('Wasserstein distance per timestep (across agents)')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    return wasserstein_per_timestep
+
+def plot_box_per_timestep(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    
+    if y_true.ndim == 1:
+        y_true = y_true[:, None]
+    if y_pred.ndim == 1:
+        y_pred = y_pred[:, None]
+    
+    T = min(y_true.shape[0], y_pred.shape[0])
+    
+    fig, ax = plt.subplots(figsize=(14, 6))
+    
+    positions_obs = []
+    positions_pred = []
+    data_obs = []
+    data_pred = []
+    
+    box_width = 0.35
+    for t in range(T):
+        pos_obs = 2 * t
+        pos_pred = 2 * t + box_width + 0.1
+        
+        positions_obs.append(pos_obs)
+        positions_pred.append(pos_pred)
+        data_obs.append(y_true[t, :])
+        data_pred.append(y_pred[t, :])
+    
+    bp_obs = ax.boxplot(
+        data_obs,
+        positions=positions_obs,
+        widths=box_width,
+        patch_artist=True,
+        labels=[f't={t}' for t in range(T)],
+    )
+    bp_pred = ax.boxplot(
+        data_pred,
+        positions=positions_pred,
+        widths=box_width,
+        patch_artist=True,
+        labels=['' for t in range(T)],
+    )
+    
+    for patch in bp_obs['boxes']:
+        patch.set_facecolor('tab:blue')
+        patch.set_alpha(0.6)
+    for patch in bp_pred['boxes']:
+        patch.set_facecolor('tab:orange')
+        patch.set_alpha(0.6)
+    
+    ax.set_xlabel('time slice')
+    ax.set_ylabel('stance score')
+    ax.set_title('Agent stance distribution per timestep (observed vs predicted)')
+    
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='tab:blue', alpha=0.6, label='Observed'),
+        Patch(facecolor='tab:orange', alpha=0.6, label='Predicted'),
+    ]
+    ax.legend(handles=legend_elements, loc='upper right')
+    
+    plt.tight_layout()
+    plt.show()
+    return bp_obs, bp_pred
+
+
+def plot_violin_per_timestep(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    
+    if y_true.ndim == 1:
+        y_true = y_true[:, None]
+    if y_pred.ndim == 1:
+        y_pred = y_pred[:, None]
+    
+    T = min(y_true.shape[0], y_pred.shape[0])
+    
+    fig, ax = plt.subplots(figsize=(14, 6))
+    
+    positions_obs = []
+    positions_pred = []
+    data_obs = []
+    data_pred = []
+    
+    for t in range(T):
+        pos_obs = 2 * t
+        pos_pred = 2 * t + 1
+        
+        positions_obs.append(pos_obs)
+        positions_pred.append(pos_pred)
+        data_obs.append(y_true[t, :])
+        data_pred.append(y_pred[t, :])
+    
+    vp_obs = ax.violinplot(data_obs, positions=positions_obs, widths=0.7, showmeans=True)
+    vp_pred = ax.violinplot(data_pred, positions=positions_pred, widths=0.7, showmeans=True)
+    
+    for pc in vp_obs['bodies']:
+        pc.set_facecolor('tab:blue')
+        pc.set_alpha(0.6)
+    for pc in vp_pred['bodies']:
+        pc.set_facecolor('tab:orange')
+        pc.set_alpha(0.6)
+    
+    ax.set_xticks([2 * t + 0.5 for t in range(T)])
+    ax.set_xticklabels([f't={t}' for t in range(T)])
+    ax.set_xlabel('time slice')
+    ax.set_ylabel('stance score')
+    ax.set_title('Agent stance distribution per timestep (violin plot: observed vs predicted)')
+    
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='tab:blue', alpha=0.6, label='Observed'),
+        Patch(facecolor='tab:orange', alpha=0.6, label='Predicted'),
+    ]
+    ax.legend(handles=legend_elements, loc='upper right')
+    
+    plt.tight_layout()
+    plt.show()
+    return vp_obs, vp_pred
+
+
+def compute_max_prediction_error(y_true, y_pred, num_params=1):
+    y_true = np.asarray(y_true, dtype=float).ravel()
+    y_pred = np.asarray(y_pred, dtype=float).ravel()
+    
+    if y_true.shape != y_pred.shape:
+        raise ValueError('y_true and y_pred must have the same shape')
+    if y_true.size == 0:
+        return {
+            'max_error': np.nan,
+            'aic': np.nan,
+            'bic': np.nan,
+            'sse': np.nan,
+            'n_obs': 0,
+        }
+    
+    errors = np.abs(y_true - y_pred)
+    max_error = float(np.max(errors))
+    emax2 = float(max_error ** 2)
+    
+    sse = float(np.sum((y_true - y_pred) ** 2))
+    n = len(y_true)
+
+    if emax2 > 0:
+        # Max-criterion AIC/BIC: treat Emax^2 as the typical variance proxy.
+        aic = 2.0 * float(num_params) + n * np.log(emax2)
+        bic = float(num_params) * np.log(n) + n * np.log(emax2)
+    else:
+        # Perfect fit implies variance proxy -> 0.
+        aic = -np.inf
+        bic = -np.inf
+    
+    return {
+        'max_error': max_error,
+        'aic': float(aic),
+        'bic': float(bic),
+        'sse': sse,
+        'emax2': emax2,
+        'n_obs': int(n),
+    }
+
+
+def compute_mean_prediction_error(y_true, y_pred, num_params=1):
+    y_true = np.asarray(y_true, dtype=float).ravel()
+    y_pred = np.asarray(y_pred, dtype=float).ravel()
+    
+    if y_true.shape != y_pred.shape:
+        raise ValueError('y_true and y_pred must have the same shape')
+    if y_true.size == 0:
+        return {
+            'mean_error': np.nan,
+            'aic': np.nan,
+            'bic': np.nan,
+            'sse': np.nan,
+            'n_obs': 0,
+        }
+    
+    errors = np.abs(y_true - y_pred)
+    mean_error = float(np.mean(errors))
+    
+    sse = float(np.sum((y_true - y_pred) ** 2))
+    n = len(y_true)
+
+    if sse > 0:
+        aic = 2.0 * float(num_params) + n * np.log(sse / n)
+        bic = float(num_params) * np.log(n) + n * np.log(sse / n)
+    else:
+        aic = -np.inf
+        bic = -np.inf
+    
+    return {
+        'mean_error': mean_error,
+        'aic': float(aic),
+        'bic': float(bic),
+        'sse': sse,
+        'n_obs': int(n),
+    }
 
