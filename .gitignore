@@ -17,3 +17,4 @@ init_conditions/
 graphs/
 debate_topics/
 .DS_Store
+ollama/

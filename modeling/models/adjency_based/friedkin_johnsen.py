@@ -1,182 +1,66 @@
-"""Adjacency-based Friedkin-Johnsen fitting and rollout."""
+"""Adjacency-based Friedkin-Johnsen fitting and rollout.
 
+Delegates to shared.ablation_core; exposes backward-compatible wrappers.
+"""
 from __future__ import annotations
 
-import cvxpy as cp
 import numpy as np
 
-from data_prep import build_dataset_from_run, build_row_normalized_adjacency
+from shared.ablation_core import (
+    fit_opinion_dynamics,
+    rollout_opinion_dynamics,
+    select_lambda_grid,
+)
 
 
 def fit_base_friedkin_johnson_adjency(run_traj_map, run_neighbors, lambda1):
-    if lambda1 < 0:
-        raise ValueError("lambda1 must be nonnegative")
-
-    run_names = sorted(run_traj_map.keys())
-    ref_neighbors = run_neighbors[run_names[0]]
-
-    x_blocks = []
-    y_blocks = []
-    x0_blocks = []
-
-    for rn in run_names:
-        traj = np.asarray(run_traj_map[rn], dtype=float)
-        x, y = build_dataset_from_run(traj)
-        x_blocks.append(x)
-        y_blocks.append(y)
-        x0_blocks.append(np.repeat(traj[0].reshape(1, -1), x.shape[0], axis=0))
-
-    x_pool = np.vstack(x_blocks)
-    y_pool = np.vstack(y_blocks)
-    x0_pool = np.vstack(x0_blocks)
-
-    n = x_pool.shape[1]
-    abar = build_row_normalized_adjacency(ref_neighbors, n)
-    alpha = 1.0 - lambda1
-
-    gamma = cp.Variable()
-    pred_pool = lambda1 * x0_pool + alpha * (gamma * (x_pool @ abar.T) + (1.0 - gamma) * x_pool)
-
-    objective = cp.Minimize(cp.sum_squares(y_pool - pred_pool))
-    constraints = [gamma >= 0, gamma <= 1]
-
-    problem = cp.Problem(objective, constraints)
-    problem.solve(solver=cp.OSQP)
-
-    if gamma.value is None:
-        raise RuntimeError("Adjacency-based FJ optimization failed to produce a solution.")
-
-    gamma_hat = float(gamma.value)
-    w_hat = gamma_hat * abar + (1.0 - gamma_hat) * np.eye(n, dtype=float)
-    fitted_pool = lambda1 * x0_pool + alpha * (x_pool @ w_hat.T)
-    mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
-
-    return {
-        "gamma": gamma_hat,
-        "Abar": abar,
-        "W": w_hat,
-        "X_pool": x_pool,
-        "Y_pool": y_pool,
-        "X0_pool": x0_pool,
-        "mse_pool": mse_pool,
-        "status": problem.status,
-        "objective": float(problem.value) if problem.value is not None else np.nan,
-    }
+    """Base FJ (fixed lambda1, no bias) -- adjacency scalar."""
+    r = fit_opinion_dynamics(
+        run_traj_map, run_neighbors,
+        weight_type="adjacency_scalar",
+        features=["degroot", "fj"],
+        lambda1=float(lambda1), lambda2=0.0,
+    )
+    r["X0_pool"] = r.get("X0_pool")
+    return r
 
 
 def base_friedkin_johnsen_adjacency_rollout(w, x0, horizon, lambda1):
-    alpha = 1.0 - lambda1
-    x0 = np.asarray(x0, dtype=float)
-    current_x = x0.copy()
-    predictions = [current_x.copy()]
-
-    for _ in range(horizon):
-        current_x = lambda1 * x0 + alpha * (w @ current_x)
-        predictions.append(current_x.copy())
-
-    return predictions
+    """Simulate base FJ forward (no bias)."""
+    return rollout_opinion_dynamics(
+        w, x0, horizon,
+        lambda1=float(lambda1),
+        features=["degroot", "fj"],
+    )
 
 
 def fit_friedkin_johnsen_adjacency(run_traj_map, run_neighbors, lambda1, lambda2):
-    if lambda1 < 0 or lambda2 < 0 or lambda1 + lambda2 > 1:
-        raise ValueError("lambda1 and lambda2 must be nonnegative and satisfy lambda1 + lambda2 <= 1")
-
-    run_names = sorted(run_traj_map.keys())
-    ref_neighbors = run_neighbors[run_names[0]]
-
-    for rn in run_names[1:]:
-        if run_neighbors[rn] != ref_neighbors:
-            raise ValueError("RUN_NEIGHBORS must be identical across runs for pooled fitting.")
-
-    x_blocks = []
-    y_blocks = []
-    x0_blocks = []
-
-    for rn in run_names:
-        traj = np.asarray(run_traj_map[rn], dtype=float)
-        x, y = build_dataset_from_run(traj)
-        x_blocks.append(x)
-        y_blocks.append(y)
-        x0_blocks.append(np.repeat(traj[0].reshape(1, -1), x.shape[0], axis=0))
-
-    x_pool = np.vstack(x_blocks)
-    y_pool = np.vstack(y_blocks)
-    x0_pool = np.vstack(x0_blocks)
-
-    n = x_pool.shape[1]
-    abar = build_row_normalized_adjacency(ref_neighbors, n)
-    alpha = 1.0 - lambda1 - lambda2
-
-    gamma = cp.Variable()
-    bias = cp.Variable()
-
-    bias_vec = bias * np.ones((n,), dtype=float)
-    pred_pool = lambda1 * x0_pool + lambda2 * bias_vec[None, :] + alpha * (gamma * (x_pool @ abar.T) + (1.0 - gamma) * x_pool)
-
-    objective = cp.Minimize(cp.sum_squares(y_pool - pred_pool))
-    constraints = [gamma >= 0, gamma <= 1, bias >= -1, bias <= 1]
-
-    problem = cp.Problem(objective, constraints)
-    problem.solve(solver=cp.OSQP)
-
-    if gamma.value is None or bias.value is None:
-        raise RuntimeError("Adjacency-based FJ optimization failed to produce a solution.")
-
-    gamma_hat = float(gamma.value)
-    bias_hat = float(bias.value)
-    w_hat = gamma_hat * abar + (1.0 - gamma_hat) * np.eye(n, dtype=float)
-    fitted_pool = lambda1 * x0_pool + lambda2 * bias_hat * np.ones((1, n), dtype=float) + alpha * (x_pool @ w_hat.T)
-    mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
-
-    return {
-        "gamma": gamma_hat,
-        "bias": bias_hat,
-        "Abar": abar,
-        "W": w_hat,
-        "X_pool": x_pool,
-        "Y_pool": y_pool,
-        "X0_pool": x0_pool,
-        "mse_pool": mse_pool,
-        "status": problem.status,
-        "objective": float(problem.value) if problem.value is not None else np.nan,
-    }
+    """Full FJ -- adjacency scalar with bias."""
+    r = fit_opinion_dynamics(
+        run_traj_map, run_neighbors,
+        weight_type="adjacency_scalar",
+        features=["degroot", "fj"],
+        lambda1=float(lambda1), lambda2=float(lambda2),
+    )
+    return r
 
 
 def friedkin_johnsen_adjacency_rollout(w, bias, x0, horizon, lambda1, lambda2):
-    alpha = 1.0 - lambda1 - lambda2
-    x0 = np.asarray(x0, dtype=float)
-    current_x = x0.copy()
-    predictions = [current_x.copy()]
-
-    for _ in range(horizon):
-        current_x = lambda1 * x0 + lambda2 * float(bias) + alpha * (w @ current_x)
-        predictions.append(current_x.copy())
-
-    return predictions
+    """Simulate FJ forward."""
+    return rollout_opinion_dynamics(
+        w, x0, horizon,
+        bias=bias,
+        lambda1=float(lambda1),
+        lambda2=float(lambda2),
+        features=["degroot", "fj"],
+    )
 
 
 def select_friedkin_johnsen_adjacency_lambdas(run_traj_map, run_neighbors, lambda_grid):
-    best_result = None
-    all_results = []
-
-    for lambda1 in lambda_grid:
-        for lambda2 in lambda_grid:
-            if lambda1 + lambda2 > 1:
-                continue
-
-            adj_result = fit_friedkin_johnsen_adjacency(run_traj_map, run_neighbors, lambda1, lambda2)
-
-            mse_pool = adj_result["mse_pool"]
-            result = {
-                "lambda1": float(lambda1),
-                "lambda2": float(lambda2),
-                "mse_pool": mse_pool,
-                "gamma": adj_result["gamma"],
-                "bias": adj_result["bias"],
-            }
-            all_results.append(result)
-
-            if best_result is None or mse_pool < best_result["mse_pool"]:
-                best_result = result
-
-    return best_result, all_results
+    """Grid search over (lambda1, lambda2) for FJ-adjacency."""
+    return select_lambda_grid(
+        run_traj_map, run_neighbors,
+        lambda_grid,
+        weight_type="adjacency_scalar",
+        features=["degroot", "fj"],
+    )

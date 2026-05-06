@@ -4,6 +4,21 @@ import pandas as pd
 from scipy.stats import wasserstein_distance
 from matplotlib.lines import Line2D
 
+
+def build_gamma_line_search_grid(gamma0: float, num_local_points: int = 100) -> np.ndarray:
+    """Build a logarithmic search grid for the homophily parameter gamma."""
+    from numbers import Number
+    gamma0 = float(gamma0)
+    local_count = max(int(num_local_points), 5)
+    base = max(abs(gamma0), 1e-3)
+    local = np.geomspace(base / 50.0, base * 50.0, num=local_count)
+    anchors = np.asarray([0.0, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0], dtype=float)
+    gamma_grid = np.unique(np.concatenate([anchors, local]))
+    return gamma_grid[gamma_grid >= 0.0]
+
+
+
+
 def plot_observed_trajectories(run_name, observed, agent_ids, horizon):
     observed = np.asarray(observed)
     if observed.ndim == 1:
