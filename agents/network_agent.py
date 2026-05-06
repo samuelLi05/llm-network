@@ -347,12 +347,8 @@ class NetworkAgent:
 
         return response
 
-    async def _generate_from_messages(self, messages: list[dict]) -> str:
-        if not self.local_llm and not self.llm_service:
-            client = llm_config.ACTIVE_OPENAI_CLIENT
-            model = llm_config.ACTIVE_OPENAI_MODEL
-            if client is None or model is None:
-                raise RuntimeError("LLM client is not initialized. Call llm_config.initialize_active_client() first.")
+    async def _create_chat_completion_text(self, client: OpenAI, model: str, messages: list[dict]) -> str:
+        for attempt in range(5):
             response_obj = await asyncio.wait_for(
                 asyncio.to_thread(
                     client.chat.completions.create,
@@ -361,9 +357,20 @@ class NetworkAgent:
                     temperature=0.7,
                     max_tokens=300,
                 ),
-                timeout=60,
+                timeout=300,
             )
-            return response_obj.choices[0].message.content
+            content = (response_obj.choices[0].message.content or "").strip()
+            if content:
+                return content
+        return ""
+
+    async def _generate_from_messages(self, messages: list[dict]) -> str:
+        if not self.local_llm and not self.llm_service:
+            client = llm_config.ACTIVE_OPENAI_CLIENT
+            model = llm_config.ACTIVE_OPENAI_MODEL
+            if client is None or model is None:
+                raise RuntimeError("LLM client is not initialized. Call llm_config.initialize_active_client() first.")
+            return await self._create_chat_completion_text(client, model, messages)
 
         if self.llm_service:
             return await self.llm_service.generate(
