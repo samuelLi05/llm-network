@@ -325,6 +325,78 @@ def plot_wasserstein_distance_per_timestep(wasserstein_per_timestep):
     plt.show()
     return wasserstein_per_timestep
 
+
+def align_rollout_pair(observed, predicted):
+    observed = np.asarray(observed, dtype=float)
+    predicted = np.asarray(predicted, dtype=float)
+    t_common = min(observed.shape[0], predicted.shape[0])
+    return observed[:t_common], predicted[:t_common]
+
+
+def stack_curves(curves):
+    curves = [np.asarray(curve, dtype=float).ravel() for curve in curves if len(curve) > 0]
+    if not curves:
+        return np.empty((0, 0), dtype=float)
+    common_t = min(curve.shape[0] for curve in curves)
+    return np.stack([curve[:common_t] for curve in curves], axis=0)
+
+
+def evaluate_validation_model(validation_traj_map, rollout_fn):
+    run_names = sorted(validation_traj_map.keys())
+    per_run = {}
+    mean_true_curves = []
+    mean_pred_curves = []
+    var_true_curves = []
+    var_pred_curves = []
+    wasserstein_curves = []
+    transition_mses = []
+
+    for rn in run_names:
+        observed = np.asarray(validation_traj_map[rn], dtype=float)
+        predicted = np.asarray(rollout_fn(observed), dtype=float)
+        observed, predicted = align_rollout_pair(observed, predicted)
+
+        mean_true, mean_pred = compute_mean_per_timestep(observed, predicted)
+        var_true, var_pred = compute_variance_per_timestep(observed, predicted)
+        wasserstein_curve = compute_wasserstein_distance_per_timestep(observed, predicted)
+
+        transition_mses.append(float(np.mean((observed - predicted) ** 2)))
+        mean_true_curves.append(mean_true)
+        mean_pred_curves.append(mean_pred)
+        var_true_curves.append(var_true)
+        var_pred_curves.append(var_pred)
+        wasserstein_curves.append(wasserstein_curve)
+
+        per_run[rn] = {
+            'observed': observed,
+            'predicted': predicted,
+            'mean_true': mean_true,
+            'mean_pred': mean_pred,
+            'var_true': var_true,
+            'var_pred': var_pred,
+            'wasserstein': wasserstein_curve,
+            'transition_mse': float(np.mean((observed - predicted) ** 2)),
+        }
+
+    mean_true_stack = stack_curves(mean_true_curves)
+    mean_pred_stack = stack_curves(mean_pred_curves)
+    var_true_stack = stack_curves(var_true_curves)
+    var_pred_stack = stack_curves(var_pred_curves)
+    wasserstein_stack = stack_curves(wasserstein_curves)
+
+    return {
+        'per_run': per_run,
+        'mean_true_stack': mean_true_stack,
+        'mean_pred_stack': mean_pred_stack,
+        'var_true_stack': var_true_stack,
+        'var_pred_stack': var_pred_stack,
+        'wasserstein_stack': wasserstein_stack,
+        'transition_mse_mean': float(np.mean(transition_mses)),
+        'mean_curve_abs_error': float(np.mean(np.abs(mean_true_stack - mean_pred_stack))) if mean_true_stack.size else np.nan,
+        'var_curve_abs_error': float(np.mean(np.abs(var_true_stack - var_pred_stack))) if var_true_stack.size else np.nan,
+        'wasserstein_curve_mean': float(np.mean(wasserstein_stack)) if wasserstein_stack.size else np.nan,
+    }
+
 def plot_box_per_timestep(y_true, y_pred):
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)

@@ -1,4 +1,4 @@
-"""Homophily model fitting built on baseline adjacency utilities."""
+"""Adjacency-based homophily model variants (plain, stubbornness, FJ)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Callable, Dict, List, Tuple
 import cvxpy as cp
 import numpy as np
 
-from baseline_utils import build_dataset_from_run, build_row_normalized_adjacency
+from data_prep import build_dataset_from_run, build_row_normalized_adjacency, sanitize_array
 from plot_utils import (
     compute_mean_per_timestep,
     compute_variance_per_timestep,
@@ -15,10 +15,6 @@ from plot_utils import (
 )
 
 Array = np.ndarray
-
-
-def sanitize_array(values: Array) -> Array:
-    return np.nan_to_num(np.asarray(values, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def _pooled_blocks(run_traj_map: Dict[str, Array]) -> Tuple[Array, Array]:
@@ -34,12 +30,20 @@ def _pooled_blocks(run_traj_map: Dict[str, Array]) -> Tuple[Array, Array]:
     return np.vstack(x_blocks), np.vstack(y_blocks)
 
 
+def build_gamma_line_search_grid(gamma0: float, num_local_points: int = 100) -> Array:
+    local_count = max(int(num_local_points), 5)
+    base = max(abs(float(gamma0)), 1e-3)
+    local = np.geomspace(base / 50.0, base * 50.0, num=local_count)
+    anchors = np.asarray([0.0, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0], dtype=float)
+    gamma_grid = np.unique(np.concatenate([anchors, local]))
+    return gamma_grid[gamma_grid >= 0.0]
+
+
 def fit_homophily(
     run_traj_map: Dict[str, Array],
     run_neighbors: Dict[str, Dict[int, List[int]]],
     gamma0: float = 1.0,
 ) -> Dict[str, object]:
-    """Fit a gamma grid and a nonnegative self-weight for the homophily model."""
     x_pool, y_pool = _pooled_blocks(run_traj_map)
 
     run_names = sorted(run_traj_map.keys())
@@ -62,9 +66,7 @@ def fit_homophily(
 
     for gamma_candidate in gamma_candidates:
         gamma_fixed = float(gamma_candidate)
-        homo_pool = np.asarray([
-            _homophily_step(x_pool[t], gamma_fixed) for t in range(x_pool.shape[0])
-        ], dtype=float)
+        homo_pool = np.asarray([_homophily_step(x_pool[t], gamma_fixed) for t in range(x_pool.shape[0])], dtype=float)
 
         lambda_self_var = cp.Variable(nonneg=True)
         pred_pool = lambda_self_var * x_pool + (1.0 - lambda_self_var) * homo_pool
@@ -133,37 +135,11 @@ def fit_homophily(
     }
 
 
-def build_gamma_line_search_grid(gamma0: float, num_local_points: int = 100) -> Array:
-    """Build a nontrivial positive gamma grid for outer line search."""
-    local_count = max(int(num_local_points), 5)
-    base = max(abs(float(gamma0)), 1e-3)
-
-    # Explore multiple scales because W is row-normalized after the exponential kernel.
-    local = np.geomspace(base / 50.0, base * 50.0, num=local_count)
-    anchors = np.asarray([0.0, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0], dtype=float)
-    gamma_grid = np.unique(np.concatenate([anchors, local]))
-    return gamma_grid[gamma_grid >= 0.0]
-
 def fit_homophily_stubborness(
     run_traj_map: Dict[str, Array],
     run_neighbors: Dict[str, Dict[int, List[int]]],
     gamma0: float = 1.0,
 ) -> Dict[str, object]:
-    """
-    Fit homophily + Friedkin-Johnsen stubbornness via outer gamma search.
-
-    Dynamics used in pooled one-step fit:
-        y_t = lambda_self * x_t + lambda1 * x_init + lambda2 * b + alpha * H_gamma(x_t)
-        alpha = 1 - lambda_self - lambda1 - lambda2
-        H_gamma(x_t) = W_gamma(x_t) @ x_t
-    where b is a global scalar uniform bias.
-
-    Optimization strategy:
-        1) Fix gamma on a search grid.
-        2) For each gamma, solve a convex OLS problem in
-           (lambda_self, lambda1, lambda2, b_tilde=lambda2*bias) with CVXPY.
-        3) Recover bias and keep the gamma/lambda/bias triple with smallest pooled MSE.
-    """
     run_names = sorted(run_traj_map.keys())
     if not run_names:
         raise ValueError("run_traj_map is empty")
@@ -226,7 +202,7 @@ def fit_homophily_stubborness(
 
         problem.solve(solver=cp.OSQP)
 
-        if (lambda_self_var.value is None or lambda1_var.value is None or lambda2_var.value is None or b_tilde_var.value is None):
+        if lambda_self_var.value is None or lambda1_var.value is None or lambda2_var.value is None or b_tilde_var.value is None:
             continue
 
         lambda_self_hat = float(np.clip(float(lambda_self_var.value), 0.0, 1.0))
@@ -312,12 +288,6 @@ def rollout_with_homophily_stubborness(
     *,
     lambda_self: float = 0.0,
 ) -> Array:
-    """Roll out homophily + FJ stubbornness with a self-weight term.
-    
-    Dynamics:
-        x_{t+1} = lambda_self * x_t + lambda1 * x_init + lambda2 * bias + alpha * H_gamma(x_t)
-        alpha = 1 - lambda_self - lambda1 - lambda2
-    """
     if lambda_self < 0 or lambda1 < 0 or lambda2 < 0 or (lambda_self + lambda1 + lambda2) > 1:
         raise ValueError("lambda_self, lambda1 and lambda2 must be nonnegative and satisfy lambda_self + lambda1 + lambda2 <= 1")
 
@@ -333,11 +303,11 @@ def rollout_with_homophily_stubborness(
         diff = np.abs(current[:, None] - current[None, :])
         raw = Abar * np.exp(-float(gamma) * diff)
         row_sums = raw.sum(axis=1, keepdims=True)
-        W = np.zeros_like(raw, dtype=float)
+        w = np.zeros_like(raw, dtype=float)
         valid = row_sums[:, 0] > 0
-        W[valid] = raw[valid] / row_sums[valid]
+        w[valid] = raw[valid] / row_sums[valid]
 
-        homophily_part = W @ current
+        homophily_part = w @ current
         current = float(lambda_self) * current + float(lambda1) * x_init + bias_term + alpha * homophily_part
         predictions.append(current.copy())
 
@@ -353,7 +323,6 @@ def rollout_with_homophily(
     lambda_self: float = 0.0,
     lambda1: float = 0.0,
 ) -> Array:
-    """Roll out the homophily model with row-normalized kernel weights, self-weight, and initial condition term."""
     if lambda_self < 0 or lambda1 < 0 or (lambda_self + lambda1) > 1:
         raise ValueError("lambda_self and lambda1 must be nonnegative and satisfy lambda_self + lambda1 <= 1")
 
@@ -369,10 +338,10 @@ def rollout_with_homophily(
         diff = np.abs(current[:, None] - current[None, :])
         raw = Abar * np.exp(-float(gamma) * diff)
         row_sums = raw.sum(axis=1, keepdims=True)
-        W = np.zeros_like(raw, dtype=float)
+        w = np.zeros_like(raw, dtype=float)
         valid = row_sums[:, 0] > 0
-        W[valid] = raw[valid] / row_sums[valid]
-        homophily_part = W @ current
+        w[valid] = raw[valid] / row_sums[valid]
+        homophily_part = w @ current
         current = self_weight * current + init_weight * x_init + homo_weight * homophily_part
         predictions.append(current.copy())
 
@@ -397,9 +366,9 @@ def evaluate_rollout_model(
         observed = np.asarray(run_traj_map[run_name], dtype=float)
         predicted = np.asarray(rollout_fn(observed), dtype=float)
 
-        T = min(observed.shape[0], predicted.shape[0])
-        observed = observed[:T]
-        predicted = predicted[:T]
+        t_common = min(observed.shape[0], predicted.shape[0])
+        observed = observed[:t_common]
+        predicted = predicted[:t_common]
 
         mean_true, mean_pred = compute_mean_per_timestep(observed, predicted)
         var_true, var_pred = compute_variance_per_timestep(observed, predicted)
@@ -428,8 +397,8 @@ def evaluate_rollout_model(
         curves = [np.asarray(curve, dtype=float).ravel() for curve in curves if len(curve) > 0]
         if not curves:
             return np.empty((0, 0), dtype=float)
-        common_T = min(curve.shape[0] for curve in curves)
-        return np.stack([curve[:common_T] for curve in curves], axis=0)
+        common_t = min(curve.shape[0] for curve in curves)
+        return np.stack([curve[:common_t] for curve in curves], axis=0)
 
     mean_true_stack = _stack(mean_true_curves)
     mean_pred_stack = _stack(mean_pred_curves)
@@ -453,21 +422,6 @@ def fit_homophily_friedkin_johnsen(
     run_neighbors: Dict[str, Dict[int, List[int]]],
     gamma0: float = 1.0,
 ) -> Dict[str, object]:
-    """
-    Fit homophily + Friedkin-Johnsen (without bias) via outer gamma search.
-
-    Dynamics used in pooled one-step fit:
-        y_t = lambda_self * x_t + lambda1 * x_init + alpha * H_gamma(x_t)
-        alpha = 1 - lambda_self - lambda1
-        H_gamma(x_t) = W_gamma(x_t) @ x_t
-    where there is no global bias term.
-
-    Optimization strategy:
-        1) Fix gamma on a search grid.
-        2) For each gamma, solve a convex OLS problem in
-           (lambda_self, lambda1) with CVXPY.
-        3) Keep the gamma/lambda pair with smallest pooled MSE.
-    """
     run_names = sorted(run_traj_map.keys())
     if not run_names:
         raise ValueError("run_traj_map is empty")
@@ -504,7 +458,6 @@ def fit_homophily_friedkin_johnsen(
 
     gamma_candidates = build_gamma_line_search_grid(gamma0)
     best_result: Dict[str, object] | None = None
-    eps = 1e-8
 
     for gamma_candidate in gamma_candidates:
         gamma_fixed = float(gamma_candidate)
@@ -516,11 +469,7 @@ def fit_homophily_friedkin_johnsen(
 
         pred_pool = lambda_self_var * x_pool + lambda1_var * x0_pool + cp.multiply(alpha_expr, homo_pool)
         objective = cp.Minimize(cp.sum_squares(y_pool - pred_pool))
-        constraints = [
-            lambda_self_var + lambda1_var <= 1.0,
-            lambda_self_var <= 1.0,
-            lambda1_var <= 1.0,
-        ]
+        constraints = [lambda_self_var + lambda1_var <= 1.0, lambda_self_var <= 1.0, lambda1_var <= 1.0]
         problem = cp.Problem(objective, constraints)
 
         problem.solve(solver=cp.OSQP)
@@ -598,7 +547,6 @@ def rollout_with_homophily_friedkin_johnsen(
     *,
     lambda_self: float = 0.0,
 ) -> Array:
-    """Roll out homophily + FJ (no bias) with self-weight and initial condition terms."""
     if lambda_self < 0 or lambda1 < 0 or (lambda_self + lambda1) > 1:
         raise ValueError("lambda_self and lambda1 must be nonnegative and satisfy lambda_self + lambda1 <= 1")
 
@@ -613,11 +561,11 @@ def rollout_with_homophily_friedkin_johnsen(
         diff = np.abs(current[:, None] - current[None, :])
         raw = Abar * np.exp(-float(gamma) * diff)
         row_sums = raw.sum(axis=1, keepdims=True)
-        W = np.zeros_like(raw, dtype=float)
+        w = np.zeros_like(raw, dtype=float)
         valid = row_sums[:, 0] > 0
-        W[valid] = raw[valid] / row_sums[valid]
+        w[valid] = raw[valid] / row_sums[valid]
 
-        homophily_part = W @ current
+        homophily_part = w @ current
         current = float(lambda_self) * current + float(lambda1) * x_init + alpha * homophily_part
         predictions.append(current.copy())
 

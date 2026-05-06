@@ -256,3 +256,33 @@ def build_neighbors_index(data, global_agent_ids):
         ns = sorted({index[n] for n in pred[a] if n in index})
         out[index[a]] = ns or [index[a]]
     return out
+
+
+def sanitize_array(values):
+    return np.nan_to_num(np.asarray(values, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def build_dataset_from_run(run):
+    x_rows = []
+    y_rows = []
+    for t in range(len(run) - 1):
+        x_rows.append(run[t])
+        y_rows.append(run[t + 1])
+    x = np.asarray(x_rows, dtype=float)
+    y = np.asarray(y_rows, dtype=float)
+    return x, y
+
+
+def build_row_normalized_adjacency(neighbors, n):
+    a = np.zeros((n, n), dtype=float)
+    for i in range(n):
+        row_neighbors = list(neighbors[i])
+        if len(row_neighbors) == 0:
+            a[i, i] = 1.0
+            continue
+        row_neighbors = [j for j in row_neighbors if 0 <= j < n]
+        if len(row_neighbors) == 0:
+            a[i, i] = 1.0
+            continue
+        a[i, row_neighbors] = 1.0 / len(row_neighbors)
+    return a
