@@ -8,7 +8,7 @@ import cvxpy as cp
 import numpy as np
 
 from data_prep import build_dataset_from_run, build_row_normalized_adjacency, sanitize_array
-from plot_utils import (
+from analysis_utils import (
     compute_mean_per_timestep,
     compute_variance_per_timestep,
     compute_wasserstein_distance_per_timestep,
