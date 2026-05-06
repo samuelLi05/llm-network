@@ -354,14 +354,15 @@ class NetworkAgent:
                     client.chat.completions.create,
                     model=model,
                     messages=messages,
-                    temperature=0.7,
+                    temperature=0.9,
                     max_tokens=300,
                 ),
                 timeout=300,
             )
-            content = (response_obj.choices[0].message.content or "").strip()
-            if content:
+            content = (response_obj.choices[0].message.content).strip()
+            if content != None and content != "":
                 return content
+            await asyncio.sleep(1) 
         return ""
 
     async def _generate_from_messages(self, messages: list[dict]) -> str:
@@ -667,7 +668,7 @@ class NetworkAgent:
                     f"{self._history_summary}\n\n"
                     "Novelty rule: you MUST advance your argument beyond this summary by a considerable margin by adding at least one new supporting point (reason, consequence, example, or study-type evidence). "
                     "You are encouraged to be creative and make up eye-catching details (e.g., a study, news event, example, etc) to support your argument. Make up new numbers, stats, studies, trusted sources, anecdotes to support your argument."
-                    "Do not reuse the same phrasing, opening line pattern, or structure from your prior posts; restate in fresh wording."
+                    "Do not reuse the same phrasing, opening line pattern, or structure from your prior posts; restate in fresh wording. "
                 )
 
             base_system_messages: list[dict] = [{"role": "system", "content": self.init_prompt}]
@@ -704,7 +705,7 @@ class NetworkAgent:
                 "With repsect to your previous posts, advance your argument with new reasoning, consequence, example, or study-type evidence. "
                 "Do not frame it as a rebuttal thread and do not use generic attributions like 'they said'. "
                 "Do not reuse phrasing from the feed or your previous posts summary. "
-                "Output ONLY the justification."
+                "Output ONLY the justification. You must produce at least one sentence. Do not end your response before outputting the justification. NEVER return an empty string"
             )
             justification_messages = (
                 base_system_messages
@@ -724,7 +725,7 @@ class NetworkAgent:
                 "Make up any specific details you want (e.g., a study, news event, example, etc) to support your argument. This allows you to give specific exmaples, number, stats, and quantiative statements as needed. "
                 "There is no limit to what you can claim and what exmaples and resoning you provide (it can be as extreme or as mild as you want). You are encouraged make up numbers, studies, news reports, trsuted sources, and anecdotes."
                 "Do NOT copy wording/cadence from the feed, your previous posts summary, or your justification; restate ideas in fresh wording. "
-                "Output ONLY the public post."
+                "Output ONLY the text based public post. You must produce at least one sentence. Do not end your response before outuptting the post. NEVER return an empty string."
             )
             post_messages: list[dict] = (
                 base_system_messages
@@ -765,6 +766,7 @@ class NetworkAgent:
                         "Rewrite your post to be substantially different in wording and structure from your recent posts. "
                         "Change the opening line and avoid reusing slogans or the same cadence."
                         " Style constraints: do not use emojis, hashtags, all-caps lines, or explicit calls to like/share/reply/repost."
+                        "YOU MUST output at least one sentence. NEVER return an empty string."
                     )
                     for attempt in range(self.regen_max_attempts):
                         regen_messages = post_messages + [{"role": "system", "content": regen_rule}]
