@@ -431,6 +431,84 @@ def fit_degroot_adjacency_scalar(run_traj_map, run_neighbors):
         'objective': float(problem.value) if problem.value is not None else np.nan,
     }
 
+def fit_base_friedkin_johnson_adjency(run_traj_map, run_neighbors, lambda1):
+    if lambda1 < 0:
+        raise ValueError('lambda1 must be nonnegative')
+    
+    run_names = sorted(run_traj_map.keys())
+    ref_neighbors = run_neighbors[run_names[0]]
+
+    X_blocks = []
+    Y_blocks = []
+    X0_blocks = []
+
+    for rn in run_names:
+        traj = np.asarray(run_traj_map[rn], dtype=float)
+        X, Y = build_dataset_from_run(traj)
+        X_blocks.append(X)
+        Y_blocks.append(Y)
+        X0_blocks.append(np.repeat(traj[0].reshape(1, -1), X.shape[0], axis=0))
+
+    X_pool = np.vstack(X_blocks)
+    Y_pool = np.vstack(Y_blocks)
+    X0_pool = np.vstack(X0_blocks)
+
+    n = X_pool.shape[1]
+    Abar = build_row_normalized_adjacency(ref_neighbors, n)
+    alpha = 1.0 - lambda1
+
+    gamma = cp.Variable()
+
+    pred_pool = (
+        lambda1 * X0_pool
+        + alpha * (gamma * (X_pool @ Abar.T) + (1.0 - gamma) * X_pool)
+    )
+
+    objective = cp.Minimize(cp.sum_squares(Y_pool - pred_pool))
+    constraints = [
+        gamma >= 0,
+        gamma <= 1,
+    ]
+
+    problem = cp.Problem(objective, constraints)
+    problem.solve(solver=cp.OSQP)
+
+    if gamma.value is None:
+        raise RuntimeError('Adjacency-based FJ optimization failed to produce a solution.')
+
+    gamma_hat = float(gamma.value)
+    W_hat = gamma_hat * Abar + (1.0 - gamma_hat) * np.eye(n, dtype=float)
+    fitted_pool = (
+        lambda1 * X0_pool
+        + alpha * (X_pool @ W_hat.T)
+    )
+    mse_pool = float(np.mean((Y_pool - fitted_pool) ** 2))
+
+    return {
+        'gamma': gamma_hat,
+        'Abar': Abar,
+        'W': W_hat,
+        'X_pool': X_pool,
+        'Y_pool': Y_pool,
+        'X0_pool': X0_pool,
+        'mse_pool': mse_pool,
+        'status': problem.status,
+        'objective': float(problem.value) if problem.value is not None else np.nan,
+    }
+
+def base_friedkin_johnsen_adjacency_rollout(W, x0, horizon, lambda1):
+    alpha = 1.0 - lambda1
+    x0 = np.asarray(x0, dtype=float)
+    current_x = x0.copy()
+    predictions = [current_x.copy()]
+
+    for _ in range(horizon):
+        current_x = lambda1 * x0  + alpha * (W @ current_x)
+        predictions.append(current_x.copy())
+
+    return predictions
+
+
 def fit_friedkin_johnsen_adjacency(run_traj_map, run_neighbors, lambda1, lambda2):
     if lambda1 < 0 or lambda2 < 0 or lambda1 + lambda2 > 1:
         raise ValueError('lambda1 and lambda2 must be nonnegative and satisfy lambda1 + lambda2 <= 1')
