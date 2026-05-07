@@ -4,6 +4,11 @@ import pandas as pd
 from scipy.stats import wasserstein_distance
 from matplotlib.lines import Line2D
 
+from typing import Callable, Dict, List, Tuple
+
+Array = np.ndarray
+
+
 def plot_observed_trajectories(run_name, observed, agent_ids, horizon):
     observed = np.asarray(observed)
     if observed.ndim == 1:
@@ -594,4 +599,76 @@ def compute_mean_prediction_error(y_true, y_pred, num_params=1):
         'sse': sse,
         'n_obs': int(n),
     }
+
+
+def evaluate_rollout_model(
+    run_traj_map: Dict[str, Array],
+    rollout_fn: Callable[[Array], Array],
+) -> Dict[str, object]:
+    run_names = sorted(run_traj_map.keys())
+    per_run = {}
+
+    mean_true_curves = []
+    mean_pred_curves = []
+    var_true_curves = []
+    var_pred_curves = []
+    wass_curves = []
+    transition_mses = []
+
+    for run_name in run_names:
+        observed = np.asarray(run_traj_map[run_name], dtype=float)
+        predicted = np.asarray(rollout_fn(observed), dtype=float)
+
+        t_common = min(observed.shape[0], predicted.shape[0])
+        observed = observed[:t_common]
+        predicted = predicted[:t_common]
+
+        mean_true, mean_pred = compute_mean_per_timestep(observed, predicted)
+        var_true, var_pred = compute_variance_per_timestep(observed, predicted)
+        wass = compute_wasserstein_distance_per_timestep(observed, predicted)
+        mse = float(np.mean((observed - predicted) ** 2))
+
+        per_run[run_name] = {
+            "observed": observed,
+            "predicted": predicted,
+            "mean_true": mean_true,
+            "mean_pred": mean_pred,
+            "var_true": var_true,
+            "var_pred": var_pred,
+            "wasserstein": wass,
+            "transition_mse": mse,
+        }
+
+        mean_true_curves.append(mean_true)
+        mean_pred_curves.append(mean_pred)
+        var_true_curves.append(var_true)
+        var_pred_curves.append(var_pred)
+        wass_curves.append(wass)
+        transition_mses.append(mse)
+
+    def _stack(curves: List[Array]) -> Array:
+        curves = [np.asarray(curve, dtype=float).ravel() for curve in curves if len(curve) > 0]
+        if not curves:
+            return np.empty((0, 0), dtype=float)
+        common_t = min(curve.shape[0] for curve in curves)
+        return np.stack([curve[:common_t] for curve in curves], axis=0)
+
+    mean_true_stack = _stack(mean_true_curves)
+    mean_pred_stack = _stack(mean_pred_curves)
+    var_true_stack = _stack(var_true_curves)
+    var_pred_stack = _stack(var_pred_curves)
+    wass_stack = _stack(wass_curves)
+
+    return {
+        "per_run": per_run,
+        "mean_true_stack": mean_true_stack,
+        "mean_pred_stack": mean_pred_stack,
+        "var_true_stack": var_true_stack,
+        "var_pred_stack": var_pred_stack,
+        "wasserstein_stack": wass_stack,
+        "transition_mse_mean": float(np.mean(transition_mses)),
+    }
+
+
+
 

@@ -9,7 +9,7 @@ MODELS_DIR = THIS_DIR.parent
 if str(MODELS_DIR) not in sys.path:
 	sys.path.insert(0, str(MODELS_DIR))
 
-from plot_utils import compute_eigenvalue, compute_fj_eigenvalue, compute_fj_joint_eigenvalue
+from analysis_utils import compute_eigenvalue, compute_fj_eigenvalue, compute_fj_joint_eigenvalue
 
 
 def random_row_stochastic_matrix(n, rng):
