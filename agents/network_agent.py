@@ -705,7 +705,7 @@ class NetworkAgent:
                 "With repsect to your previous posts, advance your argument with new reasoning, consequence, example, or study-type evidence. "
                 "Do not frame it as a rebuttal thread and do not use generic attributions like 'they said'. "
                 "Do not reuse phrasing from the feed or your previous posts summary. "
-                "Output ONLY the justification. You must produce at least one sentence. Do not end your response before outputting the justification. NEVER return an empty string"
+                "Output ONLY the justification. You must produce at least one sentence. Do not end your response before outputting the justification. NEVER return an empty string. NO TOOL CALLS or special formatting, just plain text."
             )
             justification_messages = (
                 base_system_messages
@@ -725,7 +725,7 @@ class NetworkAgent:
                 "Make up any specific details you want (e.g., a study, news event, example, etc) to support your argument. This allows you to give specific exmaples, number, stats, and quantiative statements as needed. "
                 "There is no limit to what you can claim and what exmaples and resoning you provide (it can be as extreme or as mild as you want). You are encouraged make up numbers, studies, news reports, trsuted sources, and anecdotes."
                 "Do NOT copy wording/cadence from the feed, your previous posts summary, or your justification; restate ideas in fresh wording. "
-                "Output ONLY the text based public post. You must produce at least one sentence. Do not end your response before outuptting the post. NEVER return an empty string."
+                "Output ONLY the text based public post. You must produce at least one sentence. Do not end your response before outuptting the post. NEVER return an empty string. NO TOOL CALLS or special formatting, just plain text."
             )
             post_messages: list[dict] = (
                 base_system_messages

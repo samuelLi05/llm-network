@@ -20,7 +20,11 @@ class _OllamaChatCompletionsProxy:
         # Limit concurrent Ollama calls to avoid server overload/500s.
         _OLLAMA_CALL_SEMAPHORE.acquire()
         try:
-            return self._client.chat.completions.create(*args, **kwargs)
+            #extra_body = kwargs.pop("extra_body", {}) or {}
+
+            # Inject think=false unless explicitly provided
+            #extra_body.setdefault("think", False)
+            return self._client.chat.completions.create(*args, extra_body=extra_body, **kwargs)
         finally:
             _OLLAMA_CALL_SEMAPHORE.release()
 
