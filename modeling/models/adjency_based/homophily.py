@@ -7,146 +7,16 @@ from typing import Callable, Dict, List, Tuple
 import cvxpy as cp
 import numpy as np
 
-from data_prep import build_dataset_from_run, build_row_normalized_adjacency, sanitize_array
+from data_prep import(
+    build_dataset_from_run, 
+    build_row_normalized_adjacency,
+    sanitize_array,
+    _pooled_blocks,
+    _refine_gamma_search,
+    _make_homophily_step,
+)
 
 Array = np.ndarray
-
-
-def _gamma_to_theta(gamma: float) -> float:
-    return float(np.log(max(float(gamma), 1e-12)))
-
-
-def _theta_to_gamma(theta: float) -> float:
-    return float(np.exp(float(theta)))
-
-
-def _make_homophily_step(abar: Array) -> Callable[[Array, float], Array]:
-    def _homophily_step(x_t: Array, gamma: float) -> Array:
-        x_t = sanitize_array(x_t).ravel()
-        diff = np.abs(x_t[:, None] - x_t[None, :])
-        raw = abar * np.exp(-gamma * diff)
-        row_sums = raw.sum(axis=1, keepdims=True)
-        w_t = np.zeros_like(raw, dtype=float)
-        valid = row_sums[:, 0] > 0
-        w_t[valid] = raw[valid] / row_sums[valid]
-        return w_t @ x_t
-
-    return _homophily_step
-
-
-def _pooled_blocks(run_traj_map: Dict[str, Array]) -> Tuple[Array, Array]:
-    run_names = sorted(run_traj_map.keys())
-    x_blocks, y_blocks = [], []
-
-    for run_name in run_names:
-        traj = np.asarray(run_traj_map[run_name], dtype=float)
-        x, y = build_dataset_from_run(traj)
-        x_blocks.append(x)
-        y_blocks.append(y)
-
-    return np.vstack(x_blocks), np.vstack(y_blocks)
-
-
-def build_gamma_line_search_grid(
-    gamma0: float,
-    local_decades: float = 1.0,
-    num_local_points: int = 160,
-) -> Array:
-    base = max(abs(float(gamma0)), 1e-6)
-    local_count = max(int(num_local_points), 5)
-    span = 10.0 ** max(float(local_decades), 0.5)
-
-    lo = max(base / span, 1e-8)
-    hi = max(base * span, lo * 1.0001)
-    local = np.geomspace(lo, hi, num=local_count)
-
-    anchors = np.asarray(
-        [0.0, base * 0.5, base * 0.8, base, base * 1.25, base * 1.5],
-        dtype=float,
-    )
-
-    gamma_grid = np.unique(np.concatenate([anchors, local]))
-    gamma_grid = gamma_grid[gamma_grid >= 0.0]
-    return np.sort(gamma_grid)
-
-
-def expand_search_region(best_gamma: float, expansion_factor: float = 1.5, points_per_side: int = 80) -> Array:
-    best_gamma = max(float(best_gamma), 1e-8)
-    expansion_factor = max(float(expansion_factor), 1.1)
-    point_count = max(int(points_per_side), 2) * 2
-    lower = best_gamma / expansion_factor
-    upper = best_gamma * expansion_factor
-    return np.geomspace(lower, upper, num=point_count)
-
-
-def golden_section_search(
-    objective: Callable[[float], float],
-    a: float,
-    b: float,
-    tol: float = 1e-6,
-    max_iter: int = 200,
-) -> float:
-    left = max(float(min(a, b)), 1e-12)
-    right = max(float(max(a, b)), left * 1.0001)
-
-    phi = (1.0 + np.sqrt(5.0)) / 2.0
-    invphi = 1.0 / phi
-
-    c = right - (right - left) * invphi
-    d = left + (right - left) * invphi
-    fc = float(objective(c))
-    fd = float(objective(d))
-
-    for _ in range(int(max_iter)):
-        if abs(right - left) < tol:
-            break
-
-        if fc < fd:
-            right = d
-            d = c
-            fd = fc
-            c = right - (right - left) * invphi
-            fc = float(objective(c))
-        else:
-            left = c
-            c = d
-            fc = fd
-            d = left + (right - left) * invphi
-            fd = float(objective(d))
-
-    return float((left + right) / 2.0)
-
-
-def _refine_gamma_search(objective: Callable[[float], float], gamma0: float) -> Tuple[float, Array, Array]:
-    coarse_grid = build_gamma_line_search_grid(gamma0)
-    coarse_thetas = np.asarray([_gamma_to_theta(gamma) for gamma in coarse_grid], dtype=float)
-    coarse_losses = np.asarray([float(objective(float(gamma))) for gamma in coarse_grid], dtype=float)
-    coarse_best_idx = int(np.argmin(coarse_losses))
-    coarse_best_theta = float(coarse_thetas[coarse_best_idx])
-
-    refined_grid = expand_search_region(_theta_to_gamma(coarse_best_theta))
-    refined_thetas = np.asarray([_gamma_to_theta(gamma) for gamma in refined_grid], dtype=float)
-    refined_losses = np.asarray([float(objective(float(gamma))) for gamma in refined_grid], dtype=float)
-    refined_best_idx = int(np.argmin(refined_losses))
-
-    if len(refined_grid) >= 2:
-        left_idx = max(refined_best_idx - 1, 0)
-        right_idx = min(refined_best_idx + 1, len(refined_grid) - 1)
-        left_theta = float(refined_thetas[left_idx])
-        right_theta = float(refined_thetas[right_idx])
-        if right_theta > left_theta:
-            best_theta = golden_section_search(
-                lambda theta: objective(_theta_to_gamma(theta)),
-                left_theta,
-                right_theta,
-            )
-            best_gamma = _theta_to_gamma(best_theta)
-        else:
-            best_gamma = float(refined_grid[refined_best_idx])
-    else:
-        best_gamma = float(refined_grid[refined_best_idx])
-
-    return best_gamma, coarse_grid, refined_grid
 
 
 def fit_homophily(
@@ -154,14 +24,23 @@ def fit_homophily(
     run_neighbors: Dict[str, Dict[int, List[int]]],
     gamma0: float = 1.0,
 ) -> Dict[str, object]:
-    x_pool, y_pool = _pooled_blocks(run_traj_map)
-
+    # Build per-run datasets so each run can have its own adjacency.
     run_names = sorted(run_traj_map.keys())
-    ref_neighbors = run_neighbors[run_names[0]]
-    n = x_pool.shape[1]
-    abar = build_row_normalized_adjacency(ref_neighbors, n)
+    x_blocks = []
+    y_blocks = []
+    for run_name in run_names:
+        traj = np.asarray(run_traj_map[run_name], dtype=float)
+        x, y = build_dataset_from_run(traj)
+        x_blocks.append(x)
+        y_blocks.append(y)
 
-    homophily_step = _make_homophily_step(abar)
+    x_pool = np.vstack(x_blocks)
+    y_pool = np.vstack(y_blocks)
+    n = x_pool.shape[1]
+
+    # Build a row-normalized adjacency per run and create homophily_step per run
+    abar_blocks = [build_row_normalized_adjacency(run_neighbors.get(rn, {}), n) for rn in run_names]
+    homophily_steps = [_make_homophily_step(A) for A in abar_blocks]
     candidate_cache: Dict[float, Dict[str, object]] = {}
 
     def _solve_for_gamma(gamma_fixed: float) -> Dict[str, object] | None:
@@ -169,7 +48,12 @@ def fit_homophily(
         if gamma_fixed in candidate_cache:
             return candidate_cache[gamma_fixed]
 
-        homo_pool = np.asarray([homophily_step(x_pool[t], gamma_fixed) for t in range(x_pool.shape[0])], dtype=float)
+        # Compute homo_pool blockwise so each run uses its own adjacency
+        homo_blocks = [
+            np.asarray([homophily_steps[i](x_blocks[i][t], gamma_fixed) for t in range(x_blocks[i].shape[0])], dtype=float)
+            for i in range(len(x_blocks))
+        ]
+        homo_pool = np.vstack(homo_blocks)
 
         lambda_self_var = cp.Variable(nonneg=True)
         pred_pool = lambda_self_var * x_pool + (1.0 - lambda_self_var) * homo_pool
@@ -220,11 +104,15 @@ def fit_homophily(
     lambda_self_hat = float(best_result["lambda_self"])
     alpha_hat = float(best_result["alpha"])
 
-    fitted_rows = []
-    for t in range(x_pool.shape[0]):
-        homo_t = homophily_step(x_pool[t], gamma_hat)
-        fitted_rows.append(lambda_self_hat * x_pool[t] + alpha_hat * homo_t)
-    fitted_pool = np.asarray(fitted_rows, dtype=float)
+    # reconstruct fitted blocks using homophily_steps with gamma_hat
+    homo_blocks = [
+        np.asarray([homophily_steps[i](x_blocks[i][t], gamma_hat) for t in range(x_blocks[i].shape[0])], dtype=float)
+        for i in range(len(x_blocks))
+    ]
+    fitted_pool = np.vstack([
+        lambda_self_hat * x_blocks[i] + alpha_hat * homo_blocks[i]
+        for i in range(len(x_blocks))
+    ])
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
 
     return {
@@ -234,7 +122,7 @@ def fit_homophily(
         "lambda_self": lambda_self_hat,
         "alpha": alpha_hat,
         "gamma_grid": gamma_grid,
-        "Abar": abar,
+        "Abar_blocks": {run_names[i]: abar_blocks[i] for i in range(len(run_names))},
         "X_pool": x_pool,
         "Y_pool": y_pool,
         "mse_pool": mse_pool,
@@ -254,11 +142,6 @@ def fit_homophily_friedkin_johnsen(
     if not run_names:
         raise ValueError("run_traj_map is empty")
 
-    ref_neighbors = run_neighbors[run_names[0]]
-    for rn in run_names[1:]:
-        if run_neighbors[rn] != ref_neighbors:
-            raise ValueError("RUN_NEIGHBORS must be identical across runs for pooled fitting.")
-
     x_blocks, y_blocks, x0_blocks = [], [], []
     for run_name in run_names:
         traj = np.asarray(run_traj_map[run_name], dtype=float)
@@ -272,9 +155,8 @@ def fit_homophily_friedkin_johnsen(
     x0_pool = np.vstack(x0_blocks)
 
     n = x_pool.shape[1]
-    abar = build_row_normalized_adjacency(ref_neighbors, n)
-
-    homophily_step = _make_homophily_step(abar)
+    abar_blocks = [build_row_normalized_adjacency(run_neighbors.get(rn, {}), n) for rn in run_names]
+    homophily_steps = [_make_homophily_step(A) for A in abar_blocks]
     candidate_cache: Dict[float, Dict[str, object]] = {}
 
     def _solve_for_gamma(gamma_fixed: float) -> Dict[str, object] | None:
@@ -282,7 +164,11 @@ def fit_homophily_friedkin_johnsen(
         if gamma_fixed in candidate_cache:
             return candidate_cache[gamma_fixed]
 
-        homo_pool = np.asarray([homophily_step(x_pool[t], gamma_fixed) for t in range(x_pool.shape[0])], dtype=float)
+        homo_blocks = [
+            np.asarray([homophily_steps[i](x_blocks[i][t], gamma_fixed) for t in range(x_blocks[i].shape[0])], dtype=float)
+            for i in range(len(x_blocks))
+        ]
+        homo_pool = np.vstack(homo_blocks)
 
         lambda_self_var = cp.Variable(nonneg=True)
         lambda1_var = cp.Variable(nonneg=True)
@@ -339,12 +225,15 @@ def fit_homophily_friedkin_johnsen(
     lambda1_hat = float(best_result["lambda1"])
     alpha_hat = float(best_result["alpha"])
 
-    fitted_rows = []
-    for t in range(x_pool.shape[0]):
-        homo_t = homophily_step(x_pool[t], gamma_hat)
-        fitted_t = lambda_self_hat * x_pool[t] + lambda1_hat * x0_pool[t] + alpha_hat * homo_t
-        fitted_rows.append(fitted_t)
-    fitted_pool = np.asarray(fitted_rows, dtype=float)
+    # reconstruct fitted blocks using homophily_steps with gamma_hat
+    homo_blocks = [
+        np.asarray([homophily_steps[i](x_blocks[i][t], gamma_hat) for t in range(x_blocks[i].shape[0])], dtype=float)
+        for i in range(len(x_blocks))
+    ]
+    fitted_pool = np.vstack([
+        lambda_self_hat * x_blocks[i] + lambda1_hat * x0_blocks[i] + alpha_hat * homo_blocks[i]
+        for i in range(len(x_blocks))
+    ])
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
 
     return {
@@ -354,7 +243,7 @@ def fit_homophily_friedkin_johnsen(
         "lambda1": lambda1_hat,
         "alpha": alpha_hat,
         "gamma_grid": gamma_grid,
-        "Abar": abar,
+        "Abar_blocks": {run_names[i]: abar_blocks[i] for i in range(len(run_names))},
         "X_pool": x_pool,
         "Y_pool": y_pool,
         "X0_pool": x0_pool,
@@ -376,11 +265,6 @@ def fit_homophily_stubborness(
     if not run_names:
         raise ValueError("run_traj_map is empty")
 
-    ref_neighbors = run_neighbors[run_names[0]]
-    for rn in run_names[1:]:
-        if run_neighbors[rn] != ref_neighbors:
-            raise ValueError("RUN_NEIGHBORS must be identical across runs for pooled fitting.")
-
     x_blocks, y_blocks, x0_blocks = [], [], []
     for run_name in run_names:
         traj = np.asarray(run_traj_map[run_name], dtype=float)
@@ -394,9 +278,8 @@ def fit_homophily_stubborness(
     x0_pool = np.vstack(x0_blocks)
 
     n = x_pool.shape[1]
-    abar = build_row_normalized_adjacency(ref_neighbors, n)
-
-    homophily_step = _make_homophily_step(abar)
+    abar_blocks = [build_row_normalized_adjacency(run_neighbors.get(rn, {}), n) for rn in run_names]
+    homophily_steps = [_make_homophily_step(A) for A in abar_blocks]
     candidate_cache: Dict[float, Dict[str, object]] = {}
     eps = 1e-8
 
@@ -405,7 +288,11 @@ def fit_homophily_stubborness(
         if gamma_fixed in candidate_cache:
             return candidate_cache[gamma_fixed]
 
-        homo_pool = np.asarray([homophily_step(x_pool[t], gamma_fixed) for t in range(x_pool.shape[0])], dtype=float)
+        homo_blocks = [
+            np.asarray([homophily_steps[i](x_blocks[i][t], gamma_fixed) for t in range(x_blocks[i].shape[0])], dtype=float)
+            for i in range(len(x_blocks))
+        ]
+        homo_pool = np.vstack(homo_blocks)
 
         lambda_self_var = cp.Variable(nonneg=True)
         lambda1_var = cp.Variable(nonneg=True)
@@ -480,12 +367,14 @@ def fit_homophily_stubborness(
     bias_hat = float(best_result["bias"])
     alpha_hat = float(best_result["alpha"])
 
-    fitted_rows = []
-    for t in range(x_pool.shape[0]):
-        homo_t = homophily_step(x_pool[t], gamma_hat)
-        fitted_t = lambda_self_hat * x_pool[t] + lambda1_hat * x0_pool[t] + lambda2_hat * bias_hat + alpha_hat * homo_t
-        fitted_rows.append(fitted_t)
-    fitted_pool = np.asarray(fitted_rows, dtype=float)
+    homo_blocks = [
+        np.asarray([homophily_steps[i](x_blocks[i][t], gamma_hat) for t in range(x_blocks[i].shape[0])], dtype=float)
+        for i in range(len(x_blocks))
+    ]
+    fitted_pool = np.vstack([
+        lambda_self_hat * x_blocks[i] + lambda1_hat * x0_blocks[i] + lambda2_hat * bias_hat + alpha_hat * homo_blocks[i]
+        for i in range(len(x_blocks))
+    ])
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
 
     return {
@@ -497,7 +386,7 @@ def fit_homophily_stubborness(
         "lambda2": lambda2_hat,
         "alpha": alpha_hat,
         "gamma_grid": gamma_grid,
-        "Abar": abar,
+        "Abar_blocks": {run_names[i]: abar_blocks[i] for i in range(len(run_names))},
         "X_pool": x_pool,
         "Y_pool": y_pool,
         "X0_pool": x0_pool,

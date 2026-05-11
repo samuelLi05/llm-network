@@ -670,5 +670,62 @@ def evaluate_rollout_model(
     }
 
 
+def evaluate_validation_model_by_run(validation_traj_map, rollout_fn):
+    run_names = sorted(validation_traj_map.keys())
+    per_run = {}
+    mean_true_curves = []
+    mean_pred_curves = []
+    var_true_curves = []
+    var_pred_curves = []
+    wasserstein_curves = []
+    transition_mses = []
+
+    for rn in run_names:
+        observed = np.asarray(validation_traj_map[rn], dtype=float)
+        predicted = np.asarray(rollout_fn(rn, observed), dtype=float)
+        observed, predicted = align_rollout_pair(observed, predicted)
+
+        mean_true, mean_pred = compute_mean_per_timestep(observed, predicted)
+        var_true, var_pred = compute_variance_per_timestep(observed, predicted)
+        wasserstein_curve = compute_wasserstein_distance_per_timestep(observed, predicted)
+
+        transition_mses.append(float(np.mean((observed - predicted) ** 2)))
+        mean_true_curves.append(mean_true)
+        mean_pred_curves.append(mean_pred)
+        var_true_curves.append(var_true)
+        var_pred_curves.append(var_pred)
+        wasserstein_curves.append(wasserstein_curve)
+
+        per_run[rn] = {
+            "observed": observed,
+            "predicted": predicted,
+            "mean_true": mean_true,
+            "mean_pred": mean_pred,
+            "var_true": var_true,
+            "var_pred": var_pred,
+            "wasserstein": wasserstein_curve,
+            "transition_mse": float(np.mean((observed - predicted) ** 2)),
+        }
+
+    mean_true_stack = stack_curves(mean_true_curves)
+    mean_pred_stack = stack_curves(mean_pred_curves)
+    var_true_stack = stack_curves(var_true_curves)
+    var_pred_stack = stack_curves(var_pred_curves)
+    wasserstein_stack = stack_curves(wasserstein_curves)
+
+    return {
+        "per_run": per_run,
+        "mean_true_stack": mean_true_stack,
+        "mean_pred_stack": mean_pred_stack,
+        "var_true_stack": var_true_stack,
+        "var_pred_stack": var_pred_stack,
+        "wasserstein_stack": wasserstein_stack,
+        "transition_mse_mean": float(np.mean(transition_mses)),
+        "mean_curve_abs_error": float(np.mean(np.abs(mean_true_stack - mean_pred_stack))) if mean_true_stack.size else np.nan,
+        "var_curve_abs_error": float(np.mean(np.abs(var_true_stack - var_pred_stack))) if var_true_stack.size else np.nan,
+        "wasserstein_curve_mean": float(np.mean(wasserstein_stack)) if wasserstein_stack.size else np.nan,
+    }
+
+
 
 

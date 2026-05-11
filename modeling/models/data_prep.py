@@ -2,6 +2,9 @@ import json
 from pathlib import Path
 import numpy as np
 from collections import defaultdict
+from typing import Callable, Dict, List, Tuple
+
+Array = np.ndarray
 
 FIXED_MEAN_MSGS_PER_SLICE = 15.0
 FIXED_BASE_WINDOW_MS = 8000.0
@@ -81,6 +84,7 @@ def compute_required_time_slice_ms(n_agents, target_agent_fraction):
     required_ms = int(np.ceil(required_msgs / FIXED_MSG_RATE_PER_MS))
     required_ms = min(required_ms, FIXED_MAX_SLICE_MS)
     REQUIRED_SLICE_MS_BY_N_AND_FRACTION[cache_key] = required_ms
+    print (required_ms)
     return required_ms
 
 
@@ -198,7 +202,7 @@ def build_run_trajectory(
 ):
     agent_index = {a: i for i, a in enumerate(global_agent_ids)}
     slice_ms = compute_required_time_slice_ms(len(global_agent_ids), target_agent_fraction=target_agent_fraction)
-
+    print (slice_ms)
     events = data.get('message_events', [])
     if constrain_messages is not None:
         if not isinstance(constrain_messages, int):
@@ -272,6 +276,16 @@ def build_dataset_from_run(run):
     y = np.asarray(y_rows, dtype=float)
     return x, y
 
+def build_x0_from_agent_inits(agent_inits, n):
+    x0 = np.full((n,), np.nan, dtype=float)
+    for aid, val in agent_inits.items():
+        idx = int(aid.split("_", 1)[1]) - 1
+        x0[idx] = float(val)
+    if np.isnan(x0).any():
+        missing = np.where(np.isnan(x0))[0].tolist()
+        raise ValueError(f"missing init values for indices: {missing}")
+    return x0
+
 
 def build_row_normalized_adjacency(neighbors, n):
     a = np.zeros((n, n), dtype=float)
@@ -286,3 +300,140 @@ def build_row_normalized_adjacency(neighbors, n):
             continue
         a[i, row_neighbors] = 1.0 / len(row_neighbors)
     return a
+
+
+def _gamma_to_theta(gamma: float) -> float:
+    return float(np.log(max(float(gamma), 1e-12)))
+
+
+def _theta_to_gamma(theta: float) -> float:
+    return float(np.exp(float(theta)))
+
+
+def _make_homophily_step(abar: Array) -> Callable[[Array, float], Array]:
+    def _homophily_step(x_t: Array, gamma: float) -> Array:
+        x_t = sanitize_array(x_t).ravel()
+        diff = np.abs(x_t[:, None] - x_t[None, :])
+        raw = abar * np.exp(-gamma * diff)
+        row_sums = raw.sum(axis=1, keepdims=True)
+        w_t = np.zeros_like(raw, dtype=float)
+        valid = row_sums[:, 0] > 0
+        w_t[valid] = raw[valid] / row_sums[valid]
+        return w_t @ x_t
+
+    return _homophily_step
+
+
+def _pooled_blocks(run_traj_map: Dict[str, Array]) -> Tuple[Array, Array]:
+    run_names = sorted(run_traj_map.keys())
+    x_blocks, y_blocks = [], []
+
+    for run_name in run_names:
+        traj = np.asarray(run_traj_map[run_name], dtype=float)
+        x, y = build_dataset_from_run(traj)
+        x_blocks.append(x)
+        y_blocks.append(y)
+
+    return np.vstack(x_blocks), np.vstack(y_blocks)
+
+
+def build_gamma_line_search_grid(
+    gamma0: float,
+    local_decades: float = 1.0,
+    num_local_points: int = 160,
+) -> Array:
+    base = max(abs(float(gamma0)), 1e-6)
+    local_count = max(int(num_local_points), 5)
+    span = 10.0 ** max(float(local_decades), 0.5)
+
+    lo = max(base / span, 1e-8)
+    hi = max(base * span, lo * 1.0001)
+    local = np.geomspace(lo, hi, num=local_count)
+
+    anchors = np.asarray(
+        [0.0, base * 0.5, base * 0.8, base, base * 1.25, base * 1.5],
+        dtype=float,
+    )
+
+    gamma_grid = np.unique(np.concatenate([anchors, local]))
+    gamma_grid = gamma_grid[gamma_grid >= 0.0]
+    return np.sort(gamma_grid)
+
+
+def expand_search_region(best_gamma: float, expansion_factor: float = 1.5, points_per_side: int = 80) -> Array:
+    best_gamma = max(float(best_gamma), 1e-8)
+    expansion_factor = max(float(expansion_factor), 1.1)
+    point_count = max(int(points_per_side), 2) * 2
+    lower = best_gamma / expansion_factor
+    upper = best_gamma * expansion_factor
+    return np.geomspace(lower, upper, num=point_count)
+
+
+def golden_section_search(
+    objective: Callable[[float], float],
+    a: float,
+    b: float,
+    tol: float = 1e-6,
+    max_iter: int = 200,
+) -> float:
+    left = max(float(min(a, b)), 1e-12)
+    right = max(float(max(a, b)), left * 1.0001)
+
+    phi = (1.0 + np.sqrt(5.0)) / 2.0
+    invphi = 1.0 / phi
+
+    c = right - (right - left) * invphi
+    d = left + (right - left) * invphi
+    fc = float(objective(c))
+    fd = float(objective(d))
+
+    for _ in range(int(max_iter)):
+        if abs(right - left) < tol:
+            break
+
+        if fc < fd:
+            right = d
+            d = c
+            fd = fc
+            c = right - (right - left) * invphi
+            fc = float(objective(c))
+        else:
+            left = c
+            c = d
+            fc = fd
+            d = left + (right - left) * invphi
+            fd = float(objective(d))
+
+    return float((left + right) / 2.0)
+
+
+def _refine_gamma_search(objective: Callable[[float], float], gamma0: float) -> Tuple[float, Array, Array]:
+    coarse_grid = build_gamma_line_search_grid(gamma0)
+    coarse_thetas = np.asarray([_gamma_to_theta(gamma) for gamma in coarse_grid], dtype=float)
+    coarse_losses = np.asarray([float(objective(float(gamma))) for gamma in coarse_grid], dtype=float)
+    coarse_best_idx = int(np.argmin(coarse_losses))
+    coarse_best_theta = float(coarse_thetas[coarse_best_idx])
+
+    refined_grid = expand_search_region(_theta_to_gamma(coarse_best_theta))
+    refined_thetas = np.asarray([_gamma_to_theta(gamma) for gamma in refined_grid], dtype=float)
+    refined_losses = np.asarray([float(objective(float(gamma))) for gamma in refined_grid], dtype=float)
+    refined_best_idx = int(np.argmin(refined_losses))
+
+    if len(refined_grid) >= 2:
+        left_idx = max(refined_best_idx - 1, 0)
+        right_idx = min(refined_best_idx + 1, len(refined_grid) - 1)
+        left_theta = float(refined_thetas[left_idx])
+        right_theta = float(refined_thetas[right_idx])
+        if right_theta > left_theta:
+            best_theta = golden_section_search(
+                lambda theta: objective(_theta_to_gamma(theta)),
+                left_theta,
+                right_theta,
+            )
+            best_gamma = _theta_to_gamma(best_theta)
+        else:
+            best_gamma = float(refined_grid[refined_best_idx])
+    else:
+        best_gamma = float(refined_grid[refined_best_idx])
+
+    return best_gamma, coarse_grid, refined_grid

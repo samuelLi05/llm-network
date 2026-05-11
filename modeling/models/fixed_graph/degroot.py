@@ -45,3 +45,11 @@ def fit_row_stochastic_W_from_pooled_runs(run_traj_map, run_neighbors):
         w[i] = row
 
     return w, x_pool, y_pool
+
+def degroot_rollout_prediction(W, x0, horizon):
+    predictions = [x0]
+    current_x = x0.copy()
+    for t in range(horizon):
+        current_x = W @ current_x
+        predictions.append(current_x.copy())
+    return predictions

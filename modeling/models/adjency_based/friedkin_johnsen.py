@@ -13,8 +13,6 @@ def fit_base_friedkin_johnson_adjency(run_traj_map, run_neighbors, lambda1):
         raise ValueError("lambda1 must be nonnegative")
 
     run_names = sorted(run_traj_map.keys())
-    ref_neighbors = run_neighbors[run_names[0]]
-
     x_blocks = []
     y_blocks = []
     x0_blocks = []
@@ -31,11 +29,17 @@ def fit_base_friedkin_johnson_adjency(run_traj_map, run_neighbors, lambda1):
     x0_pool = np.vstack(x0_blocks)
 
     n = x_pool.shape[1]
-    abar = build_row_normalized_adjacency(ref_neighbors, n)
+    abar_blocks = [build_row_normalized_adjacency(run_neighbors.get(rn, {}), n) for rn in run_names]
     alpha = 1.0 - lambda1
 
     gamma = cp.Variable()
-    pred_pool = lambda1 * x0_pool + alpha * (gamma * (x_pool @ abar.T) + (1.0 - gamma) * x_pool)
+
+    # Build blockwise prediction so each run uses its own Abar
+    pred_blocks = [
+        lambda1 * x0_blocks[i] + alpha * (gamma * (x_blocks[i] @ abar_blocks[i].T) + (1.0 - gamma) * x_blocks[i])
+        for i in range(len(x_blocks))
+    ]
+    pred_pool = cp.vstack(pred_blocks)
 
     objective = cp.Minimize(cp.sum_squares(y_pool - pred_pool))
     constraints = [gamma >= 0, gamma <= 1]
@@ -47,14 +51,15 @@ def fit_base_friedkin_johnson_adjency(run_traj_map, run_neighbors, lambda1):
         raise RuntimeError("Adjacency-based FJ optimization failed to produce a solution.")
 
     gamma_hat = float(gamma.value)
-    w_hat = gamma_hat * abar + (1.0 - gamma_hat) * np.eye(n, dtype=float)
-    fitted_pool = lambda1 * x0_pool + alpha * (x_pool @ w_hat.T)
+    w_hat_blocks = [gamma_hat * abar_blocks[i] + (1.0 - gamma_hat) * np.eye(n, dtype=float) for i in range(len(abar_blocks))]
+    fitted_blocks = [lambda1 * x0_blocks[i] + alpha * (x_blocks[i] @ w_hat_blocks[i].T) for i in range(len(x_blocks))]
+    fitted_pool = np.vstack(fitted_blocks)
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
 
     return {
         "gamma": gamma_hat,
-        "Abar": abar,
-        "W": w_hat,
+        "Abar_blocks": {run_names[i]: abar_blocks[i] for i in range(len(run_names))},
+        "W_blocks": {run_names[i]: w_hat_blocks[i] for i in range(len(run_names))},
         "X_pool": x_pool,
         "Y_pool": y_pool,
         "X0_pool": x0_pool,
@@ -82,12 +87,6 @@ def fit_friedkin_johnsen_adjacency(run_traj_map, run_neighbors, lambda1, lambda2
         raise ValueError("lambda1 and lambda2 must be nonnegative and satisfy lambda1 + lambda2 <= 1")
 
     run_names = sorted(run_traj_map.keys())
-    ref_neighbors = run_neighbors[run_names[0]]
-
-    for rn in run_names[1:]:
-        if run_neighbors[rn] != ref_neighbors:
-            raise ValueError("RUN_NEIGHBORS must be identical across runs for pooled fitting.")
-
     x_blocks = []
     y_blocks = []
     x0_blocks = []
@@ -104,14 +103,19 @@ def fit_friedkin_johnsen_adjacency(run_traj_map, run_neighbors, lambda1, lambda2
     x0_pool = np.vstack(x0_blocks)
 
     n = x_pool.shape[1]
-    abar = build_row_normalized_adjacency(ref_neighbors, n)
+    abar_blocks = [build_row_normalized_adjacency(run_neighbors.get(rn, {}), n) for rn in run_names]
     alpha = 1.0 - lambda1 - lambda2
 
     gamma = cp.Variable()
     bias = cp.Variable()
 
+    # Build blockwise prediction with per-run Abar and shared scalar bias
     bias_vec = bias * np.ones((n,), dtype=float)
-    pred_pool = lambda1 * x0_pool + lambda2 * bias_vec[None, :] + alpha * (gamma * (x_pool @ abar.T) + (1.0 - gamma) * x_pool)
+    pred_blocks = [
+        lambda1 * x0_blocks[i] + lambda2 * bias_vec[None, :] + alpha * (gamma * (x_blocks[i] @ abar_blocks[i].T) + (1.0 - gamma) * x_blocks[i])
+        for i in range(len(x_blocks))
+    ]
+    pred_pool = cp.vstack(pred_blocks)
 
     objective = cp.Minimize(cp.sum_squares(y_pool - pred_pool))
     constraints = [gamma >= 0, gamma <= 1, bias >= -1, bias <= 1]
@@ -124,15 +128,16 @@ def fit_friedkin_johnsen_adjacency(run_traj_map, run_neighbors, lambda1, lambda2
 
     gamma_hat = float(gamma.value)
     bias_hat = float(bias.value)
-    w_hat = gamma_hat * abar + (1.0 - gamma_hat) * np.eye(n, dtype=float)
-    fitted_pool = lambda1 * x0_pool + lambda2 * bias_hat * np.ones((1, n), dtype=float) + alpha * (x_pool @ w_hat.T)
+    w_hat_blocks = [gamma_hat * abar_blocks[i] + (1.0 - gamma_hat) * np.eye(n, dtype=float) for i in range(len(abar_blocks))]
+    fitted_blocks = [lambda1 * x0_blocks[i] + lambda2 * bias_hat * np.ones((1, n), dtype=float) + alpha * (x_blocks[i] @ w_hat_blocks[i].T) for i in range(len(x_blocks))]
+    fitted_pool = np.vstack(fitted_blocks)
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
 
     return {
         "gamma": gamma_hat,
         "bias": bias_hat,
-        "Abar": abar,
-        "W": w_hat,
+        "Abar_blocks": {run_names[i]: abar_blocks[i] for i in range(len(run_names))},
+        "W_blocks": {run_names[i]: w_hat_blocks[i] for i in range(len(run_names))},
         "X_pool": x_pool,
         "Y_pool": y_pool,
         "X0_pool": x0_pool,

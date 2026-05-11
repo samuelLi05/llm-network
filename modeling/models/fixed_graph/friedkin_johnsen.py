@@ -5,18 +5,7 @@ from __future__ import annotations
 import cvxpy as cp
 import numpy as np
 
-from data_prep import build_dataset_from_run
-
-
-def build_x0_from_agent_inits(agent_inits, n):
-    x0 = np.full((n,), np.nan, dtype=float)
-    for aid, val in agent_inits.items():
-        idx = int(aid.split("_", 1)[1]) - 1
-        x0[idx] = float(val)
-    if np.isnan(x0).any():
-        missing = np.where(np.isnan(x0))[0].tolist()
-        raise ValueError(f"missing init values for indices: {missing}")
-    return x0
+from data_prep import build_dataset_from_run, build_x0_from_agent_inits
 
 
 def fit_friedkin_johnsen(run_traj_map, run_neighbors, lambda1, lambda2, agent_inits):
