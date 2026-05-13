@@ -5,7 +5,19 @@ from __future__ import annotations
 import cvxpy as cp
 import numpy as np
 
-from data_prep import build_dataset_from_run, build_row_normalized_adjacency
+from data_prep import build_dataset_from_run, build_expected_message_matrix
+
+
+def _row_normalize_matrix(w: np.ndarray) -> np.ndarray:
+    w = np.asarray(w, dtype=float)
+    row_sums = w.sum(axis=1, keepdims=True)
+    out = np.zeros_like(w, dtype=float)
+    valid = row_sums[:, 0] > 0.0
+    out[valid] = w[valid] / row_sums[valid]
+    zero_idx = np.where(~valid)[0]
+    for i in zero_idx:
+        out[i, i] = 1.0
+    return out
 
 
 def fit_degroot_adjacency_scalar(run_traj_map, run_neighbors):
@@ -27,12 +39,12 @@ def fit_degroot_adjacency_scalar(run_traj_map, run_neighbors):
 
     n = x_pool.shape[1]
 
-    # Build a row-normalized adjacency matrix for each run and form
+    # Build expected-message adjacency for each run and form
     # a block-wise prediction expression so runs can have different neighbor sets.
     abar_blocks = []
     for rn in run_names:
         neigh = run_neighbors.get(rn, {})
-        abar_blocks.append(build_row_normalized_adjacency(neigh, n))
+        abar_blocks.append(build_expected_message_matrix(neigh, n))
 
     gamma = cp.Variable()
     pred_blocks = [
@@ -52,7 +64,10 @@ def fit_degroot_adjacency_scalar(run_traj_map, run_neighbors):
 
     gamma_hat = float(gamma.value)
     # Build per-run W matrices and per-run fitted blocks
-    w_blocks = [gamma_hat * A + (1.0 - gamma_hat) * np.eye(n, dtype=float) for A in abar_blocks]
+    w_blocks = [
+        _row_normalize_matrix(gamma_hat * A + (1.0 - gamma_hat) * np.eye(n, dtype=float))
+        for A in abar_blocks
+    ]
     fitted_blocks = [x_blocks[i] @ w_blocks[i].T for i in range(len(x_blocks))]
     fitted_pool = np.vstack(fitted_blocks)
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))

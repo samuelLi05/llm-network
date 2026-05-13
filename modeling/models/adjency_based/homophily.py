@@ -8,8 +8,8 @@ import cvxpy as cp
 import numpy as np
 
 from data_prep import(
-    build_dataset_from_run, 
-    build_row_normalized_adjacency,
+    build_dataset_from_run,
+    build_expected_message_matrix,
     sanitize_array,
     _pooled_blocks,
     _refine_gamma_search,
@@ -38,8 +38,8 @@ def fit_homophily(
     y_pool = np.vstack(y_blocks)
     n = x_pool.shape[1]
 
-    # Build a row-normalized adjacency per run and create homophily_step per run
-    abar_blocks = [build_row_normalized_adjacency(run_neighbors.get(rn, {}), n) for rn in run_names]
+    # Build expected-message adjacency per run and create homophily_step per run
+    abar_blocks = [build_expected_message_matrix(run_neighbors.get(rn, {}), n) for rn in run_names]
     homophily_steps = [_make_homophily_step(A) for A in abar_blocks]
     candidate_cache: Dict[float, Dict[str, object]] = {}
 
@@ -155,7 +155,7 @@ def fit_homophily_friedkin_johnsen(
     x0_pool = np.vstack(x0_blocks)
 
     n = x_pool.shape[1]
-    abar_blocks = [build_row_normalized_adjacency(run_neighbors.get(rn, {}), n) for rn in run_names]
+    abar_blocks = [build_expected_message_matrix(run_neighbors.get(rn, {}), n) for rn in run_names]
     homophily_steps = [_make_homophily_step(A) for A in abar_blocks]
     candidate_cache: Dict[float, Dict[str, object]] = {}
 
@@ -278,7 +278,7 @@ def fit_homophily_stubborness(
     x0_pool = np.vstack(x0_blocks)
 
     n = x_pool.shape[1]
-    abar_blocks = [build_row_normalized_adjacency(run_neighbors.get(rn, {}), n) for rn in run_names]
+    abar_blocks = [build_expected_message_matrix(run_neighbors.get(rn, {}), n) for rn in run_names]
     homophily_steps = [_make_homophily_step(A) for A in abar_blocks]
     candidate_cache: Dict[float, Dict[str, object]] = {}
     eps = 1e-8

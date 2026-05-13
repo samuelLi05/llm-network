@@ -302,6 +302,33 @@ def build_row_normalized_adjacency(neighbors, n):
     return a
 
 
+def build_expected_message_matrix(neighbors, n, poisson_mean: float = FIXED_MEAN_MSGS_PER_SLICE):
+    # expected posts per source (uniform)
+    expected_per_source = float(poisson_mean) / float(max(1, int(n)))
+
+    # build out-degree counts for each source j
+    out_deg = np.zeros((n,), dtype=int)
+    for recv, srcs in neighbors.items():
+        for j in srcs:
+            if 0 <= j < n:
+                out_deg[j] += 1
+
+    # ensure self-loop counted if agent has no out-neighbors (neighbors mapping may omit)
+    for j in range(n):
+        if out_deg[j] == 0:
+            out_deg[j] = 1
+
+    A = np.zeros((n, n), dtype=float)
+    for i in range(n):
+        srcs = [j for j in neighbors.get(i, []) if 0 <= j < n]
+        if not srcs:
+            continue
+        for j in srcs:
+            A[i, j] = expected_per_source / float(out_deg[j])
+
+    return A
+
+
 def _gamma_to_theta(gamma: float) -> float:
     return float(np.log(max(float(gamma), 1e-12)))
 

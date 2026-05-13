@@ -5,7 +5,19 @@ from __future__ import annotations
 import cvxpy as cp
 import numpy as np
 
-from data_prep import build_dataset_from_run, build_row_normalized_adjacency
+from data_prep import build_dataset_from_run, build_expected_message_matrix
+
+
+def _row_normalize_matrix(w: np.ndarray) -> np.ndarray:
+    w = np.asarray(w, dtype=float)
+    row_sums = w.sum(axis=1, keepdims=True)
+    out = np.zeros_like(w, dtype=float)
+    valid = row_sums[:, 0] > 0.0
+    out[valid] = w[valid] / row_sums[valid]
+    zero_idx = np.where(~valid)[0]
+    for i in zero_idx:
+        out[i, i] = 1.0
+    return out
 
 
 def fit_base_friedkin_johnson_adjency(run_traj_map, run_neighbors, lambda1):
@@ -29,7 +41,7 @@ def fit_base_friedkin_johnson_adjency(run_traj_map, run_neighbors, lambda1):
     x0_pool = np.vstack(x0_blocks)
 
     n = x_pool.shape[1]
-    abar_blocks = [build_row_normalized_adjacency(run_neighbors.get(rn, {}), n) for rn in run_names]
+    abar_blocks = [build_expected_message_matrix(run_neighbors.get(rn, {}), n) for rn in run_names]
     alpha = 1.0 - lambda1
 
     gamma = cp.Variable()
@@ -51,7 +63,10 @@ def fit_base_friedkin_johnson_adjency(run_traj_map, run_neighbors, lambda1):
         raise RuntimeError("Adjacency-based FJ optimization failed to produce a solution.")
 
     gamma_hat = float(gamma.value)
-    w_hat_blocks = [gamma_hat * abar_blocks[i] + (1.0 - gamma_hat) * np.eye(n, dtype=float) for i in range(len(abar_blocks))]
+    w_hat_blocks = [
+        _row_normalize_matrix(gamma_hat * abar_blocks[i] + (1.0 - gamma_hat) * np.eye(n, dtype=float))
+        for i in range(len(abar_blocks))
+    ]
     fitted_blocks = [lambda1 * x0_blocks[i] + alpha * (x_blocks[i] @ w_hat_blocks[i].T) for i in range(len(x_blocks))]
     fitted_pool = np.vstack(fitted_blocks)
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
@@ -103,7 +118,7 @@ def fit_friedkin_johnsen_adjacency(run_traj_map, run_neighbors, lambda1, lambda2
     x0_pool = np.vstack(x0_blocks)
 
     n = x_pool.shape[1]
-    abar_blocks = [build_row_normalized_adjacency(run_neighbors.get(rn, {}), n) for rn in run_names]
+    abar_blocks = [build_expected_message_matrix(run_neighbors.get(rn, {}), n) for rn in run_names]
     alpha = 1.0 - lambda1 - lambda2
 
     gamma = cp.Variable()
@@ -128,7 +143,10 @@ def fit_friedkin_johnsen_adjacency(run_traj_map, run_neighbors, lambda1, lambda2
 
     gamma_hat = float(gamma.value)
     bias_hat = float(bias.value)
-    w_hat_blocks = [gamma_hat * abar_blocks[i] + (1.0 - gamma_hat) * np.eye(n, dtype=float) for i in range(len(abar_blocks))]
+    w_hat_blocks = [
+        _row_normalize_matrix(gamma_hat * abar_blocks[i] + (1.0 - gamma_hat) * np.eye(n, dtype=float))
+        for i in range(len(abar_blocks))
+    ]
     fitted_blocks = [lambda1 * x0_blocks[i] + lambda2 * bias_hat * np.ones((1, n), dtype=float) + alpha * (x_blocks[i] @ w_hat_blocks[i].T) for i in range(len(x_blocks))]
     fitted_pool = np.vstack(fitted_blocks)
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
