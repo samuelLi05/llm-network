@@ -84,7 +84,7 @@ def compute_required_time_slice_ms(n_agents, target_agent_fraction):
     required_ms = int(np.ceil(required_msgs / FIXED_MSG_RATE_PER_MS))
     required_ms = min(required_ms, FIXED_MAX_SLICE_MS)
     REQUIRED_SLICE_MS_BY_N_AND_FRACTION[cache_key] = required_ms
-    print (required_ms)
+    # print (required_ms)
     return required_ms
 
 
@@ -202,7 +202,7 @@ def build_run_trajectory(
 ):
     agent_index = {a: i for i, a in enumerate(global_agent_ids)}
     slice_ms = compute_required_time_slice_ms(len(global_agent_ids), target_agent_fraction=target_agent_fraction)
-    print (slice_ms)
+    # print (slice_ms)
     events = data.get('message_events', [])
     if constrain_messages is not None:
         if not isinstance(constrain_messages, int):

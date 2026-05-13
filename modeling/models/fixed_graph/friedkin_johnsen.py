@@ -7,6 +7,85 @@ import numpy as np
 
 from data_prep import build_dataset_from_run, build_x0_from_agent_inits
 
+def fit_friedkin_johnsen_no_bias(run_traj_map, run_neighbors, lamda1, agent_inits):
+    run_names = sorted(run_traj_map.keys())
+    ref_neighbors = run_neighbors[run_names[0]]
+
+    for rn in run_names[1:]:
+        if run_neighbors[rn] != ref_neighbors:
+            raise ValueError("RUN_NEIGHBORS must be identical across runs")
+    
+    x_blocks = []
+    y_blocks = []
+    for rn in run_names:
+        traj = np.asarray(run_traj_map[rn], dtype=float)
+        x, y = build_dataset_from_run(traj)
+        x_blocks.append(x)
+        y_blocks.append(y)
+
+    x_pool = np.vstack(x_blocks)
+    y_pool = np.vstack(y_blocks)
+    n = x_pool.shape[1]
+    alpha = 1.0 - lamda1
+
+    w_vars = []
+    objective_terms = []
+    x0_init = build_x0_from_agent_inits(agent_inits, n)
+
+    for i in range(n):
+        ns = ref_neighbors[i]
+        if len(ns) == 0:
+            continue
+
+        w_ns = cp.Variable(len(ns))
+        w_vars.append((i, ns, w_ns))
+
+        x_ns = x_pool[:, ns]
+        y = y_pool[:, i]
+        x0i = float(x0_init[i])
+
+        pred = lamda1 * x0i + alpha * (x_ns @ w_ns)
+        objective_terms.append(cp.sum_squares(y - pred))
+
+        constraints = [w_ns >= 0, cp.sum(w_ns) == alpha]
+        objective_terms.append(cp.sum_squares(y - pred))
+
+    objective = cp.Minimize(cp.sum(objective_terms))
+    prob = cp.Problem(objective, constraints)
+    prob.solve(solver=cp.OSQP)
+
+    if prob.status != cp.OPTIMAL:
+        raise RuntimeError(f"Friedkin-Johnsen optimization failed: status={prob.status}")
+    
+    w = np.zeros((n, n), dtype=float)
+    for (i, ns, w_ns) in w_vars:
+        w[i, ns] = np.asarray(w_ns.value, dtype=float).ravel()
+
+    return w, x_pool, y_pool
+def select_lambda_friedkin_johnsen_no_bias(run_traj_map, run_neighbors, lambda_grid, agent_inits):
+    best_result = None
+    all_results = []
+
+    for lambda1 in lambda_grid:
+        w_hat, x_pool, y_pool = fit_friedkin_johnsen_no_bias(run_traj_map, run_neighbors, lambda1, agent_inits)
+
+        n = x_pool.shape[1]
+        x0 = build_x0_from_agent_inits(agent_inits, n)
+        alpha = 1.0 - lambda1
+        pred_pool = lambda1 * x0[None, :] + alpha * (x_pool @ w_hat.T)
+        mse_pool = float(np.mean((y_pool - pred_pool) ** 2))
+
+        result = {
+            "lambda1": float(lambda1),
+            "mse_pool": mse_pool,
+        }
+        all_results.append(result)
+
+        if best_result is None or mse_pool < best_result["mse_pool"]:
+            best_result = result
+
+    return best_result, all_results
+
 
 def fit_friedkin_johnsen(run_traj_map, run_neighbors, lambda1, lambda2, agent_inits):
     if lambda1 < 0 or lambda2 < 0 or lambda1 + lambda2 > 1:

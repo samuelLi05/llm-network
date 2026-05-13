@@ -76,14 +76,14 @@ def _build_supports(ref_neighbors: Dict[int, List[int]], n: int) -> Tuple[List[n
     return supports, support_sizes
 
 
-def _split_row_params(row_params: Array, support_sizes: List[int]) -> Array:
+def _split_row_params(row_params: Array, support_sizes: List[int]) -> List[np.ndarray]:
     row_params = np.asarray(row_params, dtype=float).ravel()
-    rows = []
+    rows: List[np.ndarray] = []
     cursor = 0
     for size in support_sizes:
         rows.append(row_params[cursor:cursor + size])
         cursor += size
-    return np.asarray(rows, dtype=float)
+    return rows
 
 
 def _evaluate_pool(x_pool: Array, W: Array, gamma: float) -> Array:
