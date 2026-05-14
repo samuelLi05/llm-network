@@ -115,6 +115,21 @@ def fit_homophily(
     ])
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
 
+    # build per-run representative W (time-averaged row-stochastic matrices)
+    W_blocks = {}
+    for i, A in enumerate(abar_blocks):
+        x_block = x_blocks[i]
+        w_time = []
+        for t in range(x_block.shape[0]):
+            diff = np.abs(x_block[t][:, None] - x_block[t][None, :])
+            raw = A * np.exp(-float(gamma_hat) * diff)
+            row_sums = raw.sum(axis=1, keepdims=True)
+            w_t = np.zeros_like(raw, dtype=float)
+            valid = row_sums[:, 0] > 0
+            w_t[valid] = raw[valid] / row_sums[valid]
+            w_time.append(w_t)
+        W_blocks[run_names[i]] = np.mean(np.asarray(w_time, dtype=float), axis=0)
+
     return {
         "name": "homophily",
         "gamma": gamma_hat,
@@ -123,6 +138,7 @@ def fit_homophily(
         "alpha": alpha_hat,
         "gamma_grid": gamma_grid,
         "Abar_blocks": {run_names[i]: abar_blocks[i] for i in range(len(run_names))},
+        "W_blocks": W_blocks,
         "X_pool": x_pool,
         "Y_pool": y_pool,
         "mse_pool": mse_pool,
@@ -236,6 +252,21 @@ def fit_homophily_friedkin_johnsen(
     ])
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
 
+    # build per-run representative W (time-averaged row-stochastic matrices)
+    W_blocks = {}
+    for i, A in enumerate(abar_blocks):
+        x_block = x_blocks[i]
+        w_time = []
+        for t in range(x_block.shape[0]):
+            diff = np.abs(x_block[t][:, None] - x_block[t][None, :])
+            raw = A * np.exp(-float(gamma_hat) * diff)
+            row_sums = raw.sum(axis=1, keepdims=True)
+            w_t = np.zeros_like(raw, dtype=float)
+            valid = row_sums[:, 0] > 0
+            w_t[valid] = raw[valid] / row_sums[valid]
+            w_time.append(w_t)
+        W_blocks[run_names[i]] = np.mean(np.asarray(w_time, dtype=float), axis=0)
+
     return {
         "name": "homophily_friedkin_johnsen",
         "gamma": gamma_hat,
@@ -244,6 +275,7 @@ def fit_homophily_friedkin_johnsen(
         "alpha": alpha_hat,
         "gamma_grid": gamma_grid,
         "Abar_blocks": {run_names[i]: abar_blocks[i] for i in range(len(run_names))},
+        "W_blocks": W_blocks,
         "X_pool": x_pool,
         "Y_pool": y_pool,
         "X0_pool": x0_pool,
@@ -377,6 +409,21 @@ def fit_homophily_stubborness(
     ])
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
 
+    # build per-run representative W (time-averaged row-stochastic matrices)
+    W_blocks = {}
+    for i, A in enumerate(abar_blocks):
+        x_block = x_blocks[i]
+        w_time = []
+        for t in range(x_block.shape[0]):
+            diff = np.abs(x_block[t][:, None] - x_block[t][None, :])
+            raw = A * np.exp(-float(gamma_hat) * diff)
+            row_sums = raw.sum(axis=1, keepdims=True)
+            w_t = np.zeros_like(raw, dtype=float)
+            valid = row_sums[:, 0] > 0
+            w_t[valid] = raw[valid] / row_sums[valid]
+            w_time.append(w_t)
+        W_blocks[run_names[i]] = np.mean(np.asarray(w_time, dtype=float), axis=0)
+
     return {
         "name": "homophily_stubborness",
         "gamma": gamma_hat,
@@ -387,6 +434,7 @@ def fit_homophily_stubborness(
         "alpha": alpha_hat,
         "gamma_grid": gamma_grid,
         "Abar_blocks": {run_names[i]: abar_blocks[i] for i in range(len(run_names))},
+        "W_blocks": W_blocks,
         "X_pool": x_pool,
         "Y_pool": y_pool,
         "X0_pool": x0_pool,
