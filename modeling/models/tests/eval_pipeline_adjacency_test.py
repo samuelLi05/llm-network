@@ -15,7 +15,15 @@ from data_prep import build_expected_message_matrix
 from adjacency_based.degroot import fit_degroot_adjacency_scalar
 from adjacency_based.friedkin_johnsen import fit_friedkin_johnsen_adjacency
 from adjacency_based.homophily import fit_homophily, fit_homophily_friedkin_johnsen, fit_homophily_stubborness
-from synthetic_data import build_neighbors_all_to_all, build_synthetic_fj_runs, build_synthetic_homophily_runs, build_synthetic_linear_runs
+from synthetic_data import (
+	build_neighbors_all_to_all,
+	build_synthetic_fj_runs,
+	build_synthetic_fj_runs_from_neighbors,
+	build_synthetic_homophily_runs,
+	build_synthetic_linear_runs,
+	build_synthetic_linear_runs_from_neighbors,
+	build_synthetic_homophily_runs_from_neighbors,
+)
 
 
 def _row_normalize(mat):
@@ -45,7 +53,7 @@ def test_degroot_adjacency_scalar_fit_returns_row_stochastic_w_and_low_mse():
 	Abar = build_expected_message_matrix(neighbors, n)
 	gamma_true = 0.65
 	W_true = _row_normalize(gamma_true * Abar + (1.0 - gamma_true) * np.eye(n))
-	run_traj_map = build_synthetic_linear_runs(rng, W_true, n_runs=8, horizon=24, noise_std=0.0)
+	run_traj_map = build_synthetic_linear_runs_from_neighbors(rng, neighbors, n_runs=8, horizon=24, noise_std=0.0)
 
 	fit = fit_degroot_adjacency_scalar(run_traj_map, run_neighbors)
 
@@ -68,12 +76,11 @@ def test_fj_adjacency_fit_returns_row_stochastic_w_and_low_mse():
 	lambda2 = 0.25
 	bias = -0.15
 
-	_, run_traj_map, run_neighbors = build_synthetic_fj_runs(
+	_, run_traj_map, run_neighbors = build_synthetic_fj_runs_from_neighbors(
 		rng=rng,
-		n=n,
+		neighbors=neighbors,
 		n_runs=10,
 		horizon=24,
-		neighbors=neighbors,
 		lambda1=lambda1,
 		lambda2=lambda2,
 		b=bias,
@@ -104,28 +111,31 @@ def test_homophily_adjacency_variants_fit_low_mse():
 	run_neighbors = {f'run_{i:02d}': neighbors for i in range(6)}
 	Abar = build_expected_message_matrix(neighbors, n)
 
-	runs_plain = build_synthetic_homophily_runs(
+	# Use neighbors-based generator for adjacency-focused tests
+	runs_plain = build_synthetic_homophily_runs_from_neighbors(
 		rng=rng,
 		n=n,
 		n_runs=6,
 		horizon=18,
-		Abar=Abar,
+		neighbors=neighbors,
 		gamma=1.0,
 		noise_std=0.0,
+		poisson_mean=None,
 		lambda_self=0.2,
 	)
 	fit_plain = fit_homophily(runs_plain, run_neighbors, gamma0=1.0)
 	assert fit_plain['success']
 	assert fit_plain['mse_pool'] < 1e-9
 
-	runs_fj = build_synthetic_homophily_runs(
+	runs_fj = build_synthetic_homophily_runs_from_neighbors(
 		rng=rng,
 		n=n,
 		n_runs=6,
 		horizon=18,
-		Abar=Abar,
+		neighbors=neighbors,
 		gamma=0.9,
 		noise_std=0.0,
+		poisson_mean=None,
 		lambda_self=0.2,
 		lambda1=0.25,
 	)
@@ -133,14 +143,15 @@ def test_homophily_adjacency_variants_fit_low_mse():
 	assert fit_fj['success']
 	assert fit_fj['mse_pool'] < 1e-5
 
-	runs_bias = build_synthetic_homophily_runs(
+	runs_bias = build_synthetic_homophily_runs_from_neighbors(
 		rng=rng,
 		n=n,
 		n_runs=6,
 		horizon=18,
-		Abar=Abar,
+		neighbors=neighbors,
 		gamma=1.1,
 		noise_std=0.0,
+		poisson_mean=None,
 		lambda_self=0.2,
 		lambda1=0.2,
 		lambda2=0.2,

@@ -86,6 +86,49 @@ def build_synthetic_linear_runs(rng, W_true, n_runs, horizon, noise_std):
 		run_traj[f'run_{r:02d}'] = np.asarray(states, dtype=float)
 	return run_traj
 
+def _build_uniform_neighbor_matrix(neighbors, n):
+	Abar = np.zeros((n, n), dtype=float)
+	for src in range(n):
+		src_nbrs = [j for j in neighbors.get(src, []) if 0 <= j < n]
+		if len(src_nbrs) == 0:
+			Abar[src, src] = 1.0
+			continue
+		weight = 1.0 / float(len(src_nbrs))
+		for recv in src_nbrs:
+			Abar[recv, src] = weight
+	return Abar
+
+
+def build_synthetic_linear_runs_from_neighbors(rng, neighbors, n_runs, horizon, noise_std):
+	n = len(neighbors)
+	Abar = _build_uniform_neighbor_matrix(neighbors, n)
+	run_traj = {}
+	for r in range(n_runs):
+		x = rng.uniform(-1.0, 1.0, size=n)
+		states = [x.copy()]
+		for _ in range(horizon):
+			x = Abar.T @ x + noise_std * rng.normal(size=n)
+			states.append(x.copy())
+		run_traj[f'run_{r:02d}'] = np.asarray(states, dtype=float)
+	return run_traj
+
+
+def build_synthetic_fj_runs_from_neighbors(rng, neighbors, n_runs, horizon, lambda1, lambda2, b, x0_prior, noise_std):
+	n = len(neighbors)
+	Abar = _build_uniform_neighbor_matrix(neighbors, n)
+	alpha = 1.0 - lambda1 - lambda2
+	bias_vec = np.full((n,), float(b), dtype=float)
+	run_traj = {}
+	for r in range(n_runs):
+		x = rng.uniform(-1.0, 1.0, size=n)
+		states = [x.copy()]
+		for _ in range(horizon):
+			x = lambda1 * x0_prior + lambda2 * bias_vec + alpha * (Abar.T @ x) + noise_std * rng.normal(size=n)
+			states.append(x.copy())
+		run_traj[f'run_{r:02d}'] = np.asarray(states, dtype=float)
+	run_neighbors = {rn: neighbors for rn in run_traj}
+	return Abar, run_traj, run_neighbors
+
 
 def build_synthetic_homophily_runs(
 	rng,
@@ -127,6 +170,97 @@ def build_synthetic_homophily_runs(
 			)
 			states.append(x.copy())
 		run_traj[f'run_{r:02d}'] = np.asarray(states, dtype=float)
+	return run_traj
+
+
+def build_synthetic_homophily_runs_from_neighbors(
+	rng,
+	n,
+	n_runs,
+	horizon,
+	neighbors,
+	gamma,
+	noise_std,
+	lambda_self=0.0,
+	lambda1=0.0,
+	lambda2=0.0,
+	bias=0.0,
+	poisson_mean: float = 15.0,
+):
+	"""Generate homophily-based runs by sampling per-source messages using neighbor lists.
+
+	This produces per-step, adjacency-derived matrices (A_t) constructed from sampled
+	messages (Poisson per source). Each A_t is converted into a per-step recipient
+	distribution and used with the exponential homophily kernel to form W_t.
+
+	Returns a run_traj mapping compatible with adjacency-based fits: keys 'run_XX'.
+	"""
+	run_traj = {}
+	n = int(n)
+
+	for r in range(n_runs):
+		x_init = rng.uniform(-1.0, 1.0, size=n)
+		x = x_init.copy()
+		states = [x.copy()]
+
+		for _ in range(horizon):
+			# Build per-source recipient distribution (Abar_t).
+			# If poisson_mean is None, use the deterministic expected distribution
+			if poisson_mean is None:
+				Abar_t = np.zeros((n, n), dtype=float)
+				for src in range(n):
+					src_nbrs = [j for j in neighbors.get(src, []) if 0 <= j < n]
+					if len(src_nbrs) == 0:
+						Abar_t[src, src] = 1.0
+						continue
+					for recv in src_nbrs:
+						Abar_t[recv, src] = 1.0 / float(len(src_nbrs))
+			else:
+				# sample number of messages from each source
+				counts = rng.poisson(lam=float(poisson_mean), size=n)
+
+				# accumulate counts per (receiver, source)
+				A_counts = np.zeros((n, n), dtype=float)
+				for src in range(n):
+					src_nbrs = [j for j in neighbors.get(src, []) if 0 <= j < n]
+					if len(src_nbrs) == 0:
+						# self-loop
+						A_counts[src, src] += counts[src]
+						continue
+					if counts[src] <= 0:
+						continue
+					picks = rng.integers(0, len(src_nbrs), size=counts[src])
+					for p in picks:
+						recv = src_nbrs[int(p)]
+						A_counts[recv, src] += 1.0
+
+				# convert counts into per-source recipient distribution (Abar_t)
+				Abar_t = np.zeros_like(A_counts, dtype=float)
+				for src in range(n):
+					denom = float(counts[src]) if counts[src] > 0 else 1.0
+					Abar_t[:, src] = A_counts[:, src] / denom
+
+			# homophily kernel -> row-normalized W_t
+			diff = np.abs(x[:, None] - x[None, :])
+			raw = Abar_t * np.exp(-float(gamma) * diff)
+			row_sums = raw.sum(axis=1, keepdims=True)
+			W_t = np.zeros_like(raw, dtype=float)
+			valid = row_sums[:, 0] > 0.0
+			W_t[valid] = raw[valid] / row_sums[valid]
+
+			h = W_t @ x
+			alpha = 1.0 - float(lambda_self) - float(lambda1) - float(lambda2)
+			x = (
+				float(lambda_self) * x
+				+ float(lambda1) * x_init
+				+ float(lambda2) * float(bias)
+				+ alpha * h
+				+ float(noise_std) * rng.normal(size=n)
+			)
+			states.append(x.copy())
+
+		run_traj[f'run_{r:02d}'] = np.asarray(states, dtype=float)
+
 	return run_traj
 
 

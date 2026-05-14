@@ -465,7 +465,8 @@ def test_fixed_graph_fj_fit_low_mse_and_stochastic_w():
     _assert_row_stochastic(W_hat)
 
 
-def test_fixed_graph_homophily_variants_low_mse():
+def test_fixed_graph_homophily_variants_low_mse_noiseless():
+    """Test absolute MSE threshold for noiseless synthetic data (verifies multi-start sufficiency)."""
     rng = np.random.default_rng(2033)
     n = 6
     neighbors = build_neighbors_all_to_all(n)
@@ -475,6 +476,7 @@ def test_fixed_graph_homophily_variants_low_mse():
     for i in range(n):
         W_base[i, :] = rng.dirichlet(np.ones(n))
 
+    # Plain homophily - noiseless (MSE should be near machine epsilon)
     runs_plain = build_synthetic_homophily_runs(
         rng=rng,
         n=n,
@@ -485,10 +487,11 @@ def test_fixed_graph_homophily_variants_low_mse():
         noise_std=0.0,
     )
     fit_plain = fit_fg_homophily(runs_plain, run_neighbors, gamma0=1.0)
-    assert fit_plain["success"]
-    assert fit_plain["mse_pool"] < 1e-8
+    assert fit_plain["success"], f"Plain homophily fit failed: {fit_plain['status']}"
+    assert fit_plain["mse_pool"] < 1e-8, f"Plain homophily MSE {fit_plain['mse_pool']} exceeds threshold 1e-8"
     _assert_row_stochastic(fit_plain["W"])
 
+    # FJ homophily - noiseless
     runs_fj = build_synthetic_homophily_runs(
         rng=rng,
         n=n,
@@ -500,10 +503,11 @@ def test_fixed_graph_homophily_variants_low_mse():
         lambda1=0.3,
     )
     fit_fj = fit_fg_fj_homophily(runs_fj, run_neighbors, gamma0=1.0)
-    assert fit_fj["success"]
-    assert fit_fj["mse_pool"] < 1e-8
+    assert fit_fj["success"], f"FJ homophily fit failed: {fit_fj['status']}"
+    assert fit_fj["mse_pool"] < 1e-8, f"FJ homophily MSE {fit_fj['mse_pool']} exceeds threshold 1e-8"
     _assert_row_stochastic(fit_fj["W"])
 
+    # Bias homophily - noiseless
     runs_bias = build_synthetic_homophily_runs(
         rng=rng,
         n=n,
@@ -517,6 +521,70 @@ def test_fixed_graph_homophily_variants_low_mse():
         bias=-0.1,
     )
     fit_bias = fit_fg_fj_bias_homophily(runs_bias, run_neighbors, gamma0=1.0)
-    assert fit_bias["success"]
-    assert fit_bias["mse_pool"] < 1e-8
+    assert fit_bias["success"], f"Bias homophily fit failed: {fit_bias['status']}"
+    assert fit_bias["mse_pool"] < 1e-8, f"Bias homophily MSE {fit_bias['mse_pool']} exceeds threshold 1e-8"
+    _assert_row_stochastic(fit_bias["W"])
+
+
+def test_fixed_graph_homophily_variants_low_noise():
+    """Test with small observation noise (MSE should still be very low)."""
+    rng = np.random.default_rng(2034)
+    n = 6
+    neighbors = build_neighbors_all_to_all(n)
+    run_neighbors = {f"run_{i:02d}": neighbors for i in range(8)}
+
+    W_base = np.zeros((n, n), dtype=float)
+    for i in range(n):
+        W_base[i, :] = rng.dirichlet(np.ones(n))
+
+    noise_level = 0.01  # Small noise
+    
+    # Plain homophily - small noise
+    runs_plain = build_synthetic_homophily_runs(
+        rng=rng,
+        n=n,
+        n_runs=8,
+        horizon=18,
+        Abar=W_base,
+        gamma=1.0,
+        noise_std=noise_level,
+    )
+    fit_plain = fit_fg_homophily(runs_plain, run_neighbors, gamma0=1.0)
+    assert fit_plain["success"], f"Plain homophily fit failed: {fit_plain['status']}"
+    # Absolute threshold for small noise: should be able to fit well
+    assert fit_plain["mse_pool"] < 1e-4, f"Plain homophily MSE {fit_plain['mse_pool']} exceeds threshold 1e-4"
+    _assert_row_stochastic(fit_plain["W"])
+
+    # FJ homophily - small noise
+    runs_fj = build_synthetic_homophily_runs(
+        rng=rng,
+        n=n,
+        n_runs=8,
+        horizon=18,
+        Abar=W_base,
+        gamma=1.0,
+        noise_std=noise_level,
+        lambda1=0.3,
+    )
+    fit_fj = fit_fg_fj_homophily(runs_fj, run_neighbors, gamma0=1.0)
+    assert fit_fj["success"], f"FJ homophily fit failed: {fit_fj['status']}"
+    assert fit_fj["mse_pool"] < 1e-4, f"FJ homophily MSE {fit_fj['mse_pool']} exceeds threshold 1e-4"
+    _assert_row_stochastic(fit_fj["W"])
+
+    # Bias homophily - small noise
+    runs_bias = build_synthetic_homophily_runs(
+        rng=rng,
+        n=n,
+        n_runs=8,
+        horizon=18,
+        Abar=W_base,
+        gamma=1.0,
+        noise_std=noise_level,
+        lambda1=0.3,
+        lambda2=0.2,
+        bias=-0.1,
+    )
+    fit_bias = fit_fg_fj_bias_homophily(runs_bias, run_neighbors, gamma0=1.0)
+    assert fit_bias["success"], f"Bias homophily fit failed: {fit_bias['status']}"
+    assert fit_bias["mse_pool"] < 1e-4, f"Bias homophily MSE {fit_bias['mse_pool']} exceeds threshold 1e-4"
     _assert_row_stochastic(fit_bias["W"])
