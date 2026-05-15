@@ -27,6 +27,10 @@ from fixed_graph.degroot import fit_row_stochastic_W_from_pooled_runs
 from fixed_graph.friedkin_johnsen import fit_friedkin_johnsen as fit_fg_friedkin_johnsen
 from fixed_graph.homophily import fit_fg_homophily, fit_fg_fj_homophily, fit_fg_fj_bias_homophily
 
+# Global noise control knobs (set to 0.0 for noiseless tests, or adjust as needed)
+NOISE_STD_NOISELESS = 0.0
+NOISE_STD_LOW = 0.01  # Small noise for robustness testing
+
 
 def min_positive_eigvals(values, tol=1e-12):
     vals = np.asarray(values, dtype=float)
@@ -484,7 +488,7 @@ def test_fixed_graph_homophily_variants_low_mse_noiseless():
         horizon=18,
         Abar=W_base,
         gamma=1.0,
-        noise_std=0.0,
+        noise_std=NOISE_STD_NOISELESS,
     )
     fit_plain = fit_fg_homophily(runs_plain, run_neighbors, gamma0=1.0)
     assert fit_plain["success"], f"Plain homophily fit failed: {fit_plain['status']}"
@@ -499,7 +503,7 @@ def test_fixed_graph_homophily_variants_low_mse_noiseless():
         horizon=18,
         Abar=W_base,
         gamma=1.0,
-        noise_std=0.0,
+        noise_std=NOISE_STD_NOISELESS,
         lambda1=0.3,
     )
     fit_fj = fit_fg_fj_homophily(runs_fj, run_neighbors, gamma0=1.0)
@@ -515,7 +519,7 @@ def test_fixed_graph_homophily_variants_low_mse_noiseless():
         horizon=18,
         Abar=W_base,
         gamma=1.0,
-        noise_std=0.0,
+        noise_std=NOISE_STD_NOISELESS,
         lambda1=0.3,
         lambda2=0.2,
         bias=-0.1,
@@ -536,8 +540,6 @@ def test_fixed_graph_homophily_variants_low_noise():
     W_base = np.zeros((n, n), dtype=float)
     for i in range(n):
         W_base[i, :] = rng.dirichlet(np.ones(n))
-
-    noise_level = 0.01  # Small noise
     
     # Plain homophily - small noise
     runs_plain = build_synthetic_homophily_runs(
@@ -547,7 +549,7 @@ def test_fixed_graph_homophily_variants_low_noise():
         horizon=18,
         Abar=W_base,
         gamma=1.0,
-        noise_std=noise_level,
+        noise_std=NOISE_STD_LOW,
     )
     fit_plain = fit_fg_homophily(runs_plain, run_neighbors, gamma0=1.0)
     assert fit_plain["success"], f"Plain homophily fit failed: {fit_plain['status']}"
@@ -563,7 +565,7 @@ def test_fixed_graph_homophily_variants_low_noise():
         horizon=18,
         Abar=W_base,
         gamma=1.0,
-        noise_std=noise_level,
+        noise_std=NOISE_STD_LOW,
         lambda1=0.3,
     )
     fit_fj = fit_fg_fj_homophily(runs_fj, run_neighbors, gamma0=1.0)
@@ -579,7 +581,7 @@ def test_fixed_graph_homophily_variants_low_noise():
         horizon=18,
         Abar=W_base,
         gamma=1.0,
-        noise_std=noise_level,
+        noise_std=NOISE_STD_LOW,
         lambda1=0.3,
         lambda2=0.2,
         bias=-0.1,

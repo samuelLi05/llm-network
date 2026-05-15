@@ -25,6 +25,10 @@ from synthetic_data import (
 	build_synthetic_homophily_runs_from_neighbors,
 )
 
+# Global noise control knobs (set to 0.0 for noiseless tests, or adjust as needed)
+NOISE_STD_NOISELESS = 0.0
+NOISE_STD_LOW = 0.01  # Small noise for robustness testing
+
 
 def _row_normalize(mat):
 	mat = np.asarray(mat, dtype=float)
@@ -53,7 +57,7 @@ def test_degroot_adjacency_scalar_fit_returns_row_stochastic_w_and_low_mse():
 	Abar = build_expected_message_matrix(neighbors, n)
 	gamma_true = 0.65
 	W_true = _row_normalize(gamma_true * Abar + (1.0 - gamma_true) * np.eye(n))
-	run_traj_map = build_synthetic_linear_runs_from_neighbors(rng, neighbors, n_runs=8, horizon=24, noise_std=0.0)
+	run_traj_map = build_synthetic_linear_runs_from_neighbors(rng, neighbors, n_runs=8, horizon=24, noise_std=NOISE_STD_NOISELESS)
 
 	fit = fit_degroot_adjacency_scalar(run_traj_map, run_neighbors)
 
@@ -85,7 +89,7 @@ def test_fj_adjacency_fit_returns_row_stochastic_w_and_low_mse():
 		lambda2=lambda2,
 		b=bias,
 		x0_prior=x0_prior,
-		noise_std=0.0,
+		noise_std=NOISE_STD_NOISELESS,
 	)
 
 	fit = fit_friedkin_johnsen_adjacency(run_traj_map, run_neighbors, lambda1=lambda1, lambda2=lambda2)
@@ -119,7 +123,7 @@ def test_homophily_adjacency_variants_fit_low_mse():
 		horizon=18,
 		neighbors=neighbors,
 		gamma=1.0,
-		noise_std=0.0,
+		noise_std=NOISE_STD_NOISELESS,
 		poisson_mean=None,
 		lambda_self=0.2,
 	)
@@ -134,7 +138,7 @@ def test_homophily_adjacency_variants_fit_low_mse():
 		horizon=18,
 		neighbors=neighbors,
 		gamma=0.9,
-		noise_std=0.0,
+		noise_std=NOISE_STD_NOISELESS,
 		poisson_mean=None,
 		lambda_self=0.2,
 		lambda1=0.25,
@@ -150,7 +154,7 @@ def test_homophily_adjacency_variants_fit_low_mse():
 		horizon=18,
 		neighbors=neighbors,
 		gamma=1.1,
-		noise_std=0.0,
+		noise_std=NOISE_STD_NOISELESS,
 		poisson_mean=None,
 		lambda_self=0.2,
 		lambda1=0.2,

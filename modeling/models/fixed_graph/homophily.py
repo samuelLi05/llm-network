@@ -262,16 +262,21 @@ def fit_fg_fj_homophily(
     gamma_base = max(float(gamma0), EPS)
     row_start = _row_block_start(support_sizes, scale=1.0)
     starts = [
-        np.concatenate(([gamma_base * 0.25], [0.15], row_start)),
-        np.concatenate(([gamma_base * 0.40], [0.25], row_start)),
-        np.concatenate(([gamma_base * 0.55], [0.35], row_start)),
-        np.concatenate(([gamma_base * 0.70], [0.45], row_start)),
-        np.concatenate(([gamma_base * 0.85], [0.55], row_start)),
-        np.concatenate(([gamma_base * 1.00], [0.65], row_start)),
+        np.concatenate(([gamma_base * 0.20], [0.10], row_start)),
+        np.concatenate(([gamma_base * 0.30], [0.15], row_start)),
+        np.concatenate(([gamma_base * 0.40], [0.20], row_start)),
+        np.concatenate(([gamma_base * 0.50], [0.25], row_start)),
+        np.concatenate(([gamma_base * 0.60], [0.30], row_start)),
+        np.concatenate(([gamma_base * 0.75], [0.40], row_start)),
+        np.concatenate(([gamma_base * 0.90], [0.50], row_start)),
+        np.concatenate(([gamma_base * 1.00], [0.60], row_start)),
         np.concatenate(([gamma_base * 1.25], [0.75], row_start)),
         np.concatenate(([gamma_base * 1.50], [0.85], row_start)),
-        np.concatenate(([gamma_base * 2.00], [0.90], row_start)),
-        np.concatenate(([gamma_base * 3.00], [0.95], row_start)),
+        np.concatenate(([gamma_base * 1.75], [0.90], row_start)),
+        np.concatenate(([gamma_base * 2.00], [0.95], row_start)),
+        np.concatenate(([gamma_base * 3.00], [0.80], row_start)),
+        np.concatenate(([gamma_base * 5.00], [0.50], row_start)),
+        np.concatenate(([gamma_base * 8.00], [0.25], row_start)),
     ]
     bounds = [(EPS, None), (0.0, 1.0)] + [(EPS, None)] * row_size
 
@@ -372,16 +377,26 @@ def fit_fg_fj_bias_homophily(
     gamma_base = max(float(gamma0), EPS)
     row_start = _row_block_start(support_sizes, scale=1.0)
     starts = [
-        np.concatenate(([gamma_base * 0.25], [0.15, 0.15, -0.10], row_start)),
-        np.concatenate(([gamma_base * 0.40], [0.20, 0.15, -0.05], row_start)),
-        np.concatenate(([gamma_base * 0.55], [0.25, 0.15, 0.00], row_start)),
-        np.concatenate(([gamma_base * 0.70], [0.30, 0.10, 0.05], row_start)),
-        np.concatenate(([gamma_base * 0.85], [0.35, 0.10, 0.10], row_start)),
-        np.concatenate(([gamma_base * 1.00], [0.40, 0.10, -0.10], row_start)),
-        np.concatenate(([gamma_base * 1.25], [0.45, 0.05, -0.05], row_start)),
-        np.concatenate(([gamma_base * 1.50], [0.50, 0.05, 0.00], row_start)),
-        np.concatenate(([gamma_base * 2.00], [0.55, 0.05, 0.05], row_start)),
-        np.concatenate(([gamma_base * 3.00], [0.60, 0.02, 0.10], row_start)),
+        np.concatenate(([gamma_base * 0.20], [0.05, 0.90, -0.90], row_start)),
+        np.concatenate(([gamma_base * 0.30], [0.10, 0.80, -0.70], row_start)),
+        np.concatenate(([gamma_base * 0.40], [0.15, 0.70, -0.50], row_start)),
+        np.concatenate(([gamma_base * 0.50], [0.20, 0.60, -0.30], row_start)),
+        np.concatenate(([gamma_base * 0.60], [0.25, 0.50, -0.10], row_start)),
+        np.concatenate(([gamma_base * 0.70], [0.30, 0.40,  0.10], row_start)),
+        np.concatenate(([gamma_base * 0.85], [0.35, 0.30,  0.30], row_start)),
+        np.concatenate(([gamma_base * 1.00], [0.40, 0.20,  0.50], row_start)),
+        np.concatenate(([gamma_base * 1.20], [0.45, 0.10,  0.70], row_start)),
+        np.concatenate(([gamma_base * 1.40], [0.50, 0.00,  0.90], row_start)),
+        np.concatenate(([gamma_base * 1.70], [0.55, 0.05, -1.00], row_start)),
+        np.concatenate(([gamma_base * 2.00], [0.60, 0.15, -0.75], row_start)),
+        np.concatenate(([gamma_base * 2.50], [0.65, 0.35, -0.50], row_start)),
+        np.concatenate(([gamma_base * 3.00], [0.70, 0.55, -0.25], row_start)),
+        np.concatenate(([gamma_base * 4.00], [0.75, 0.75,  0.00], row_start)),
+        np.concatenate(([gamma_base * 5.00], [0.80, 0.95,  0.25], row_start)),
+        np.concatenate(([gamma_base * 6.50], [0.85, 0.80,  0.50], row_start)),
+        np.concatenate(([gamma_base * 8.00], [0.90, 0.50,  0.75], row_start)),
+        np.concatenate(([gamma_base * 10.0], [0.95, 0.20,  1.00], row_start)),
+        np.concatenate(([gamma_base * 12.0], [1.00, 0.00,  0.00], row_start)),
     ]
     bounds = [(EPS, None), (0.0, 1.0), (0.0, 1.0), (-1.0, 1.0)] + [(EPS, None)] * row_size
 
