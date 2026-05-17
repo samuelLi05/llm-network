@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import cvxpy as cp
 import numpy as np
-
-from data_prep import build_dataset_from_run, build_expected_message_matrix
+from modeling.models.data_prep import build_dataset_from_run, build_expected_message_matrix
 
 
 def _row_normalize_matrix(w: np.ndarray) -> np.ndarray:

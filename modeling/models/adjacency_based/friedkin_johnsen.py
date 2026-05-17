@@ -5,7 +5,7 @@ from __future__ import annotations
 import cvxpy as cp
 import numpy as np
 
-from data_prep import build_dataset_from_run, build_expected_message_matrix
+from modeling.models.data_prep import build_dataset_from_run, build_expected_message_matrix
 
 
 def _row_normalize_matrix(w: np.ndarray) -> np.ndarray:
@@ -201,5 +201,25 @@ def select_friedkin_johnsen_adjacency_lambdas(run_traj_map, run_neighbors, lambd
 
             if best_result is None or mse_pool < best_result["mse_pool"]:
                 best_result = result
+
+    return best_result, all_results
+
+def select_base_friedkin_johnsen_adjacency_lambda(run_traj_map, run_neighbors, lambda_grid):
+    best_result = None
+    all_results = []
+
+    for lambda1 in lambda_grid:
+        adj_result = fit_base_friedkin_johnson_adjency(run_traj_map, run_neighbors, lambda1)
+
+        mse_pool = adj_result["mse_pool"]
+        result = {
+            "lambda1": float(lambda1),
+            "mse_pool": mse_pool,
+            "gamma": adj_result["gamma"],
+        }
+        all_results.append(result)
+
+        if best_result is None or mse_pool < best_result["mse_pool"]:
+            best_result = result
 
     return best_result, all_results

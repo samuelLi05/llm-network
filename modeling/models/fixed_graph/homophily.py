@@ -5,7 +5,7 @@ from typing import Callable, Dict, List, Tuple
 import numpy as np
 from scipy.optimize import minimize
 
-from data_prep import(
+from modeling.models.data_prep import(
     build_dataset_from_run, 
     sanitize_array,
     _make_homophily_step,

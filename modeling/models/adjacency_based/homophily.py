@@ -7,7 +7,7 @@ from typing import Callable, Dict, List, Tuple
 import cvxpy as cp
 import numpy as np
 
-from data_prep import(
+from modeling.models.data_prep import (
     build_dataset_from_run,
     build_expected_message_matrix,
     sanitize_array,

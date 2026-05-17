@@ -5,7 +5,7 @@ from __future__ import annotations
 import cvxpy as cp
 import numpy as np
 
-from data_prep import build_dataset_from_run
+from modeling.models.data_prep import build_dataset_from_run
 
 
 def fit_row_stochastic_W_from_pooled_runs(run_traj_map, run_neighbors):

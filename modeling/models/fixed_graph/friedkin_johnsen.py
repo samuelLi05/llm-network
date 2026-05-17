@@ -5,7 +5,7 @@ from __future__ import annotations
 import cvxpy as cp
 import numpy as np
 
-from data_prep import build_dataset_from_run, build_x0_from_agent_inits
+from modeling.models.data_prep import build_dataset_from_run, build_x0_from_agent_inits
 
 def fit_friedkin_johnsen_no_bias(run_traj_map, run_neighbors, lamda1, agent_inits):
     run_names = sorted(run_traj_map.keys())
