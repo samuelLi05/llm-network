@@ -367,7 +367,7 @@ def _pooled_blocks(run_traj_map: Dict[str, Array]) -> Tuple[Array, Array]:
 def build_gamma_line_search_grid(
     gamma0: float,
     local_decades: float = 1.0,
-    num_local_points: int = 160,
+    num_local_points: int = 1600,
 ) -> Array:
     base = max(abs(float(gamma0)), 1e-6)
     local_count = max(int(num_local_points), 5)
