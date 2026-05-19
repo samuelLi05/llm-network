@@ -85,7 +85,7 @@ def compute_required_time_slice_ms(n_agents, target_agent_fraction):
     required_ms = min(required_ms, FIXED_MAX_SLICE_MS)
     REQUIRED_SLICE_MS_BY_N_AND_FRACTION[cache_key] = required_ms
     # print (required_ms)
-    return required_ms
+    return 8000
 
 
 def _bucket_events_to_slices(message_events, slice_ms):
@@ -446,6 +446,9 @@ def _refine_gamma_search(objective: Callable[[float], float], gamma0: float) -> 
     refined_losses = np.asarray([float(objective(float(gamma))) for gamma in refined_grid], dtype=float)
     refined_best_idx = int(np.argmin(refined_losses))
 
+    candidate_gammas = list(np.asarray(coarse_grid, dtype=float)) + list(np.asarray(refined_grid, dtype=float))
+    candidate_losses = list(np.asarray(coarse_losses, dtype=float)) + list(np.asarray(refined_losses, dtype=float))
+
     if len(refined_grid) >= 2:
         left_idx = max(refined_best_idx - 1, 0)
         right_idx = min(refined_best_idx + 1, len(refined_grid) - 1)
@@ -458,9 +461,14 @@ def _refine_gamma_search(objective: Callable[[float], float], gamma0: float) -> 
                 right_theta,
             )
             best_gamma = _theta_to_gamma(best_theta)
+            candidate_gammas.append(best_gamma)
+            candidate_losses.append(float(objective(best_gamma)))
         else:
             best_gamma = float(refined_grid[refined_best_idx])
     else:
         best_gamma = float(refined_grid[refined_best_idx])
+
+    best_idx = int(np.argmin(np.asarray(candidate_losses, dtype=float)))
+    best_gamma = float(candidate_gammas[best_idx])
 
     return best_gamma, coarse_grid, refined_grid
