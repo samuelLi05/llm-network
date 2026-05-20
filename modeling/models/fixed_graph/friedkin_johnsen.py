@@ -288,6 +288,76 @@ def fit_friedkin_johnsen_joint(run_traj_map, run_neighbors, agent_inits, eps=1e-
     }
 
 
+def fit_friedkin_johnsen_no_bias_joint(run_traj_map, run_neighbors, agent_inits, eps=1e-4):
+    run_names = sorted(run_traj_map.keys())
+    ref_neighbors = run_neighbors[run_names[0]]
+
+    for rn in run_names[1:]:
+        if run_neighbors[rn] != ref_neighbors:
+            raise ValueError("RUN_NEIGHBORS must be identical across runs for pooled fitting.")
+
+    x_blocks = []
+    y_blocks = []
+    for rn in run_names:
+        traj = np.asarray(run_traj_map[rn], dtype=float)
+        x, y = build_dataset_from_run(traj)
+        x_blocks.append(x)
+        y_blocks.append(y)
+
+    x_pool = np.vstack(x_blocks)
+    y_pool = np.vstack(y_blocks)
+    _, n = x_pool.shape
+    x0_init = build_x0_from_agent_inits(agent_inits, n)
+    x0_pool = np.repeat(x0_init.reshape(1, -1), x_pool.shape[0], axis=0)
+
+    lambda1 = cp.Variable(nonneg=True)
+    alpha = 1.0 - lambda1
+    w_tilde = cp.Variable((n, n))
+
+    residual = y_pool - (lambda1 * x0_pool + x_pool @ w_tilde.T)
+    objective = cp.Minimize(cp.sum_squares(residual))
+    constraints = [lambda1 >= 0.0, lambda1 <= 1.0 - eps]
+
+    for i in range(n):
+        ns = ref_neighbors[i]
+        allowed = np.zeros((n,), dtype=float)
+        allowed[np.asarray(ns, dtype=int)] = 1.0
+
+        constraints.append(w_tilde[i, :] >= 0)
+        constraints.append(cp.sum(w_tilde[i, :]) == alpha)
+        constraints.append(cp.multiply(1.0 - allowed, w_tilde[i, :]) == 0)
+
+    prob = cp.Problem(objective, constraints)
+    prob.solve(solver=cp.OSQP)
+
+    if lambda1.value is None or w_tilde.value is None:
+        raise RuntimeError("Joint FJ no-bias optimization failed to produce a solution.")
+
+    lambda1_hat = float(lambda1.value)
+    alpha_hat = 1.0 - lambda1_hat
+    w_tilde_hat = np.asarray(w_tilde.value, dtype=float)
+
+    if alpha_hat <= eps:
+        raise RuntimeError(f"Estimated alpha too small for stable W recovery: alpha={alpha_hat}")
+
+    w_hat = w_tilde_hat / alpha_hat
+    fitted_pool = lambda1_hat * x0_pool + x_pool @ w_tilde_hat.T
+    mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
+
+    return {
+        "lambda1": lambda1_hat,
+        "alpha": alpha_hat,
+        "W_tilde": w_tilde_hat,
+        "W": w_hat,
+        "X_pool": x_pool,
+        "Y_pool": y_pool,
+        "X0_pool": x0_pool,
+        "mse_pool": mse_pool,
+        "status": prob.status,
+        "objective": float(prob.value) if prob.value is not None else np.nan,
+    }
+
+
 def fit_friedkin_johnsen_joint_traj0(run_traj_map, run_neighbors, eps=1e-4):
     run_names = sorted(run_traj_map.keys())
     ref_neighbors = run_neighbors[run_names[0]]

@@ -61,12 +61,15 @@ def fit_homophily(
         constraints = [0.0 <= lambda_self_var, lambda_self_var <= 1.0]
         problem = cp.Problem(objective, constraints)
 
-        problem.solve(solver=cp.OSQP)
+        # Use tighter OSQP tolerances to ensure constraint satisfaction
+        problem.solve(solver=cp.OSQP, eps_abs=1e-9, eps_rel=1e-9, verbose=False)
 
         if lambda_self_var.value is None:
             return None
 
         lambda_self_hat = float(np.clip(float(lambda_self_var.value), 0.0, 1.0))
+        # Clamp to [0, 1] for numerical safety (solver precision)
+        lambda_self_hat = min(1.0, max(0.0, lambda_self_hat))
         alpha_hat = 1.0 - lambda_self_hat
         fitted_pool = lambda_self_hat * x_pool + alpha_hat * homo_pool
         mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
@@ -195,14 +198,38 @@ def fit_homophily_friedkin_johnsen(
         constraints = [lambda_self_var + lambda1_var <= 1.0, lambda_self_var <= 1.0, lambda1_var <= 1.0, lambda_self_var >= 0, lambda1_var >= 0]
         problem = cp.Problem(objective, constraints)
 
-        problem.solve(solver=cp.OSQP)
+        # Use tighter OSQP tolerances to ensure constraint satisfaction
+        problem.solve(solver=cp.OSQP, eps_abs=1e-9, eps_rel=1e-9, verbose=False)
 
         if lambda_self_var.value is None or lambda1_var.value is None:
             return None
 
-        lambda_self_hat = float(np.clip(float(lambda_self_var.value), 0.0, 1.0))
-        l1_hat = float(np.clip(float(lambda1_var.value), 0.0, 1.0))
+        # Use solver values directly (solver enforces constraints internally).
+        # Only clamp tiny negatives to 0 due to numerical precision.
+        lambda_self_hat = float(lambda_self_var.value)
+        l1_hat = float(lambda1_var.value)
+        
+        # Ensure strictly nonnegative
+        lambda_self_hat = max(0.0, lambda_self_hat)
+        l1_hat = max(0.0, l1_hat)
+        
+        # Cap individual values at [0, 1] as a safety bound
+        lambda_self_hat = min(1.0, lambda_self_hat)
+        l1_hat = min(1.0, l1_hat)
+        
+        # If sum exceeds 1.0 due to numerical precision, subtract from smallest
+        lam_sum = lambda_self_hat + l1_hat
+        if lam_sum > 1.0:
+            excess = lam_sum - 1.0
+            if lambda_self_hat <= l1_hat:
+                lambda_self_hat = max(0.0, lambda_self_hat - excess)
+            else:
+                l1_hat = max(0.0, l1_hat - excess)
+        
         alpha_hat = 1.0 - lambda_self_hat - l1_hat
+        
+        # Clamp alpha to [0, 1] for safety
+        alpha_hat = max(0.0, min(1.0, alpha_hat))
 
         fitted_pool = lambda_self_hat * x_pool + l1_hat * x0_pool + alpha_hat * homo_pool
         mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
@@ -344,18 +371,52 @@ def fit_homophily_stubborness(
         ]
         problem = cp.Problem(objective, constraints)
 
-        problem.solve(solver=cp.OSQP)
+        # Use tighter OSQP tolerances to ensure constraint satisfaction
+        problem.solve(solver=cp.OSQP, eps_abs=1e-9, eps_rel=1e-9, verbose=False)
 
         if lambda_self_var.value is None or lambda1_var.value is None or lambda2_var.value is None or b_tilde_var.value is None:
             return None
 
-        lambda_self_hat = float(np.clip(float(lambda_self_var.value), 0.0, 1.0))
-        l1_hat = float(np.clip(float(lambda1_var.value), 0.0, 1.0))
-        l2_hat = float(np.clip(float(lambda2_var.value), 0.0, 1.0))
+        # Use solver values directly (solver enforces constraints internally).
+        # Only clamp tiny negatives to 0 due to numerical precision.
+        lambda_self_hat = float(lambda_self_var.value)
+        l1_hat = float(lambda1_var.value)
+        l2_hat = float(lambda2_var.value)
+        
+        # Ensure strictly nonnegative
+        lambda_self_hat = max(0.0, lambda_self_hat)
+        l1_hat = max(0.0, l1_hat)
+        l2_hat = max(0.0, l2_hat)
+        
+        # Cap individual values at [0, 1] as a safety bound
+        lambda_self_hat = min(1.0, lambda_self_hat)
+        l1_hat = min(1.0, l1_hat)
+        l2_hat = min(1.0, l2_hat)
+        
+        # If sum exceeds 1.0 due to numerical precision, subtract excess from smallest lambda
+        # This avoids distorting the fit and ensures strict constraint satisfaction
+        lam_sum = lambda_self_hat + l1_hat + l2_hat
+        if lam_sum > 1.0:
+            excess = lam_sum - 1.0
+            # Subtract from smallest to minimize distortion
+            values = [lambda_self_hat, l1_hat, l2_hat]
+            min_idx = np.argmin(values)
+            if min_idx == 0:
+                lambda_self_hat = max(0.0, lambda_self_hat - excess)
+            elif min_idx == 1:
+                l1_hat = max(0.0, l1_hat - excess)
+            else:
+                l2_hat = max(0.0, l2_hat - excess)
+        
         b_tilde_hat = float(b_tilde_var.value)
         b_tilde_hat = float(np.clip(b_tilde_hat, -l2_hat, l2_hat))
         bias_hat = float(b_tilde_hat / l2_hat) if l2_hat > eps else 0.0
+        
+        # Compute alpha from constraint: must equal 1.0 - sum(lambdas)
         alpha_hat = 1.0 - lambda_self_hat - l1_hat - l2_hat
+        
+        # Clamp alpha to [0, 1] for safety
+        alpha_hat = max(0.0, min(1.0, alpha_hat))
 
         fitted_pool = lambda_self_hat * x_pool + l1_hat * x0_pool + b_tilde_hat + alpha_hat * homo_pool
         mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
