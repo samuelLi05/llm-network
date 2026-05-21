@@ -229,7 +229,7 @@ def fit_friedkin_johnsen_adjacency(run_traj_map, run_neighbors, lambda1, lambda2
 
     objective = cp.Minimize(cp.sum_squares(y_pool - pred_pool))
     # tighten bias bounds to avoid saturation that can cause multi-step drift
-    constraints = [gamma >= 0, gamma <= 1, bias >= -0.5, bias <= 0.5]
+    constraints = [gamma >= 0, gamma <= 1, bias >= -1.0, bias <=1.0 ]
 
     problem = cp.Problem(objective, constraints)
     problem.solve(solver=cp.OSQP)

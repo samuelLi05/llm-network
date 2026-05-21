@@ -30,6 +30,7 @@ def fit_friedkin_johnsen_no_bias(run_traj_map, run_neighbors, lamda1, agent_init
 
     w_vars = []
     objective_terms = []
+    constraints = []
     x0_init = build_x0_from_agent_inits(agent_inits, n)
 
     for i in range(n):
@@ -46,9 +47,7 @@ def fit_friedkin_johnsen_no_bias(run_traj_map, run_neighbors, lamda1, agent_init
 
         pred = lamda1 * x0i + alpha * (x_ns @ w_ns)
         objective_terms.append(cp.sum_squares(y - pred))
-
-        constraints = [w_ns >= 0, cp.sum(w_ns) == alpha]
-        objective_terms.append(cp.sum_squares(y - pred))
+        constraints += [w_ns >= 0, cp.sum(w_ns) == 1]
 
     objective = cp.Minimize(cp.sum(objective_terms))
     prob = cp.Problem(objective, constraints)
