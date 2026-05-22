@@ -59,19 +59,19 @@ def fit_base_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, eps=1
     ) = _prepare_pooled_blocks(run_traj_map, run_neighbors)
 
     lambda1_var = cp.Variable(nonneg=True)
-    u_var = cp.Variable(nonneg=True)  # u = alpha
-    v_var = cp.Variable(nonneg=True)  # v = alpha * gamma
+    # Decompose social influence as u*z_t + v*Ā*z_t, so alpha = u+v, gamma = v/(u+v).
+    u_var = cp.Variable(nonneg=True)  # u = alpha * (1 - gamma)  [self-weight component]
+    v_var = cp.Variable(nonneg=True)  # v = alpha * gamma        [adjacency-weight component]
 
     pred_blocks = [
-        lambda1_var * x0_blocks[i] + u_var * x_blocks[i] + v_var * (xa_blocks[i] - x_blocks[i])
+        lambda1_var * x0_blocks[i] + u_var * x_blocks[i] + v_var * (xa_blocks[i])
         for i in range(len(x_blocks))
     ]
     pred_pool = cp.vstack(pred_blocks)
 
     objective = cp.Minimize(cp.sum_squares(y_pool - pred_pool))
     constraints = [
-        lambda1_var + u_var == 1.0,
-        v_var <= u_var,
+        lambda1_var + u_var + v_var == 1.0,
     ]
 
     problem = cp.Problem(objective, constraints)
@@ -81,14 +81,17 @@ def fit_base_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, eps=1
         raise RuntimeError("Adjacency-based base FJ joint optimization failed to produce a solution.")
 
     lambda1_hat = float(lambda1_var.value)
-    alpha_hat = float(u_var.value)
+    u_hat = float(u_var.value)
     v_hat = float(v_var.value)
 
     # Numerical cleanup for tiny negative values.
     lambda1_hat = max(0.0, min(1.0, lambda1_hat))
-    alpha_hat = max(0.0, min(1.0, alpha_hat))
-    v_hat = max(0.0, min(alpha_hat, v_hat))
+    u_hat = max(0.0, u_hat)
+    v_hat = max(0.0, v_hat)
 
+    # alpha = u + v (total social influence weight); gamma = v / alpha
+    alpha_hat = u_hat + v_hat
+    alpha_hat = min(1.0, alpha_hat)
     gamma_hat = float(v_hat / alpha_hat) if alpha_hat > eps else 0.0
     gamma_hat = max(0.0, min(1.0, gamma_hat))
 
@@ -278,19 +281,18 @@ def fit_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, eps=1e-9):
     lambda1_var = cp.Variable(nonneg=True)
     lambda2_var = cp.Variable(nonneg=True)
     b_tilde_var = cp.Variable()  # b_tilde = lambda2 * bias
-    u_var = cp.Variable(nonneg=True)  # u = alpha
-    v_var = cp.Variable(nonneg=True)  # v = alpha * gamma
+    u_var = cp.Variable(nonneg=True)  # u = alpha * (1 - gamma)  [self-weight component]
+    v_var = cp.Variable(nonneg=True)  # v = alpha * gamma        [adjacency-weight component]
 
     pred_blocks = [
-        lambda1_var * x0_blocks[i] + b_tilde_var + u_var * x_blocks[i] + v_var * (xa_blocks[i] - x_blocks[i])
+        lambda1_var * x0_blocks[i] + b_tilde_var + u_var * x_blocks[i] + v_var * xa_blocks[i]
         for i in range(len(x_blocks))
     ]
     pred_pool = cp.vstack(pred_blocks)
 
     objective = cp.Minimize(cp.sum_squares(y_pool - pred_pool))
     constraints = [
-        lambda1_var + lambda2_var + u_var == 1.0,
-        v_var <= u_var,
+        lambda1_var + lambda2_var + u_var + v_var == 1.0,
         b_tilde_var <= lambda2_var,
         b_tilde_var >= -lambda2_var,
     ]
@@ -309,14 +311,19 @@ def fit_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, eps=1e-9):
 
     lambda1_hat = float(lambda1_var.value)
     lambda2_hat = float(lambda2_var.value)
-    alpha_hat = float(u_var.value)
+    u_hat = float(u_var.value)
     v_hat = float(v_var.value)
     b_tilde_hat = float(b_tilde_var.value)
+
+    # alpha = u + v (total social influence weight); gamma = v / alpha
+    u_hat = max(0.0, u_hat)
+    v_hat = max(0.0, v_hat)
+    alpha_hat = u_hat + v_hat
 
     # Numerical cleanup for tiny negatives.
     lambda1_hat = max(0.0, min(1.0, lambda1_hat))
     lambda2_hat = max(0.0, min(1.0, lambda2_hat))
-    alpha_hat = max(0.0, min(1.0, alpha_hat))
+    alpha_hat = min(1.0, alpha_hat)
     v_hat = max(0.0, min(alpha_hat, v_hat))
     b_tilde_hat = float(np.clip(b_tilde_hat, -lambda2_hat, lambda2_hat))
 

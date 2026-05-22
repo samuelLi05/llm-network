@@ -303,20 +303,10 @@ def build_row_normalized_adjacency(neighbors, n):
 
 
 def build_expected_message_matrix(neighbors, n, poisson_mean: float = FIXED_MEAN_MSGS_PER_SLICE):
-    # expected posts per source (uniform)
+    # Messages are broadcast: when agent j posts, all of j's followers receive it.
+    # So A[i, j] = expected posts per source = poisson_mean / n, for each j in neighbors[i].
+    # No division by out_deg[j] — the message is not split among recipients.
     expected_per_source = float(poisson_mean) / float(max(1, int(n)))
-
-    # build out-degree counts for each source j
-    out_deg = np.zeros((n,), dtype=int)
-    for recv, srcs in neighbors.items():
-        for j in srcs:
-            if 0 <= j < n:
-                out_deg[j] += 1
-
-    # ensure self-loop counted if agent has no out-neighbors (neighbors mapping may omit)
-    for j in range(n):
-        if out_deg[j] == 0:
-            out_deg[j] = 1
 
     A = np.zeros((n, n), dtype=float)
     for i in range(n):
@@ -324,7 +314,19 @@ def build_expected_message_matrix(neighbors, n, poisson_mean: float = FIXED_MEAN
         if not srcs:
             continue
         for j in srcs:
-            A[i, j] = expected_per_source / float(out_deg[j])
+            A[i, j] = expected_per_source
+
+    # Row-normalize so each row is a proper convex weight vector (sums to 1).
+    # Agents with no in-neighbors get a self-loop weight of 1.
+    row_sums = A.sum(axis=1, keepdims=True)
+    valid = row_sums[:, 0] > 0
+    A[valid] = A[valid] / row_sums[valid]
+    A[~valid, np.where(~valid)[0]] = 1.0  # self-loop for isolated agents
+
+    # raise exception if any row sums are zero or if any entries are negative (should not happen)
+    if np.any(row_sums <= 0):
+        zero_rows = np.where(row_sums[:, 0] <= 0)[0].tolist()
+        raise ValueError(f"Invalid adjacency: rows with zero sum: {zero_rows}")
 
     return A
 
@@ -346,6 +348,12 @@ def _make_homophily_step(abar: Array) -> Callable[[Array, float], Array]:
         w_t = np.zeros_like(raw, dtype=float)
         valid = row_sums[:, 0] > 0
         w_t[valid] = raw[valid] / row_sums[valid]
+
+        # raise exception if any row sums are zero (should not happen)
+        if np.any(row_sums <= 0):
+            zero_rows = np.where(row_sums[:, 0] <= 0)[0].tolist()
+            raise ValueError(f"Invalid homophily weights: rows with zero sum: {zero_rows}")
+
         return w_t @ x_t
 
     return _homophily_step
@@ -367,7 +375,10 @@ def _pooled_blocks(run_traj_map: Dict[str, Array]) -> Tuple[Array, Array]:
 def build_gamma_line_search_grid(
     gamma0: float,
     local_decades: float = 1.0,
-    num_local_points: int = 1600,
+    num_local_points: int = 80,
+    global_points: int = 80,
+    global_lo: float = 1e-9,
+    global_hi: float = 50.0,
 ) -> Array:
     base = max(abs(float(gamma0)), 1e-6)
     local_count = max(int(num_local_points), 5)
@@ -382,8 +393,11 @@ def build_gamma_line_search_grid(
         dtype=float,
     )
 
-    gamma_grid = np.unique(np.concatenate([anchors, local]))
-    gamma_grid = gamma_grid[gamma_grid >= 0.0]
+    # Global component: always covers a broad range so the search is not
+    # misled when gamma0 is near 0 or otherwise far from the true optimum.
+    global_grid = np.geomspace(float(global_lo), float(global_hi), num=max(int(global_points), 5))
+    gamma_grid = np.unique(np.concatenate([anchors, local, global_grid]))
+    gamma_grid = gamma_grid[(gamma_grid >= 0.0) & (gamma_grid <= 50.0)]
     return np.sort(gamma_grid)
 
 
@@ -403,8 +417,10 @@ def golden_section_search(
     tol: float = 1e-6,
     max_iter: int = 200,
 ) -> float:
-    left = max(float(min(a, b)), 1e-12)
-    right = max(float(max(a, b)), left * 1.0001)
+    left = float(min(a, b))
+    right = float(max(a, b))
+    if right <= left:
+        right = left + 1e-12
 
     phi = (1.0 + np.sqrt(5.0)) / 2.0
     invphi = 1.0 / phi
@@ -434,7 +450,7 @@ def golden_section_search(
     return float((left + right) / 2.0)
 
 
-def _refine_gamma_search(objective: Callable[[float], float], gamma0: float) -> Tuple[float, Array, Array]:
+def _refine_gamma_search(objective: Callable[[float], float], gamma0: float) -> Tuple[float, Array, Array, Dict[float, float]]:
     coarse_grid = build_gamma_line_search_grid(gamma0)
     coarse_thetas = np.asarray([_gamma_to_theta(gamma) for gamma in coarse_grid], dtype=float)
     coarse_losses = np.asarray([float(objective(float(gamma))) for gamma in coarse_grid], dtype=float)
@@ -471,4 +487,8 @@ def _refine_gamma_search(objective: Callable[[float], float], gamma0: float) -> 
     best_idx = int(np.argmin(np.asarray(candidate_losses, dtype=float)))
     best_gamma = float(candidate_gammas[best_idx])
 
-    return best_gamma, coarse_grid, refined_grid
+    gamma_objective_map: Dict[float, float] = {
+        float(g): float(l) for g, l in zip(candidate_gammas, candidate_losses)
+    }
+
+    return best_gamma, coarse_grid, refined_grid, gamma_objective_map
