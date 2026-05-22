@@ -2,6 +2,9 @@ from pathlib import Path
 import sys
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parents[1]
 # ensure project imports work
@@ -17,10 +20,8 @@ from modeling.models.analysis_utils import (  # type: ignore
 # Import the same model-fitting functions as notebook
 from modeling.models.adjacency_based.degroot import fit_degroot_adjacency_scalar, degroot_rollout_prediction  # type: ignore
 from modeling.models.adjacency_based.friedkin_johnsen import (
-    fit_base_friedkin_johnson_adjency,
     base_friedkin_johnsen_adjacency_rollout,
     select_base_friedkin_johnsen_adjacency_lambda,
-    fit_friedkin_johnsen_adjacency,
     select_friedkin_johnsen_adjacency_lambdas,
     friedkin_johnsen_adjacency_rollout,
 )  # type: ignore
@@ -149,6 +150,57 @@ def evaluate_model(model_name, run_traj_map, rollout_map):
     }
 
 
+def save_gamma_objective_plot(gamma_objective_map: dict, fitted_gamma: float, model_name: str, out_path: Path) -> None:
+    """Save a 3-panel plot of gamma vs objective: linear-linear, x-log, x-log y-log."""
+    if not gamma_objective_map:
+        return
+    gammas = sorted(gamma_objective_map.keys())
+    objectives = [gamma_objective_map[g] for g in gammas]
+
+    # resolve the fitted point
+    fitted_obj = gamma_objective_map.get(fitted_gamma)
+    if fitted_obj is None:
+        closest = min(gammas, key=lambda g: abs(g - fitted_gamma))
+        fitted_obj = gamma_objective_map[closest]
+
+    # positive-only copies for log-x axes (exclude gamma==0)
+    pos_mask = [g > 0 for g in gammas]
+    gammas_pos = [g for g, m in zip(gammas, pos_mask) if m]
+    objectives_pos = [o for o, m in zip(objectives, pos_mask) if m]
+
+    panels = [
+        ('linear', 'linear', 'linear x / linear y'),
+        ('log',    'linear', 'log x / linear y'),
+    ]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    fig.suptitle(f'Gamma search — {model_name}', fontsize=11)
+
+    for ax, (xscale, yscale, subtitle) in zip(axes, panels):
+        xs = gammas_pos if xscale == 'log' else gammas
+        ys = objectives_pos if xscale == 'log' else objectives
+
+        ax.plot(xs, ys, marker='o', markersize=3, linewidth=1.0, label='objective')
+
+        # fitted gamma marker — only draw axvline if gamma > 0 on log axes
+        if xscale == 'linear' or fitted_gamma > 0:
+            ax.axvline(fitted_gamma, color='red', linestyle='--', linewidth=1.0,
+                       label=f'fitted γ={fitted_gamma:.4g}')
+            ax.scatter([fitted_gamma], [fitted_obj], color='red', zorder=5, s=50)
+
+        ax.set_xscale(xscale)
+        ax.set_yscale(yscale)
+        ax.set_xlabel('gamma')
+        ax.set_ylabel('objective (MSE)')
+        ax.set_title(subtitle, fontsize=9)
+        ax.legend(fontsize=7)
+        ax.grid(True, alpha=0.3, which='both')
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+
+
 if __name__ == '__main__':
     RUNS_DIR = ROOT / 'modeling' / 'runs'
     ALL_LLMS = sorted([d.name for d in RUNS_DIR.iterdir() if d.is_dir()])
@@ -188,22 +240,26 @@ if __name__ == '__main__':
                 #LAMBDA_GRID = np.linspace(0.0, 1.0, 50)
                 DEGROOT_ADJ = fit_degroot_adjacency_scalar(run_traj, run_neighbors)
                 DEGROOT_GAMMA = DEGROOT_ADJ.get('gamma', np.nan)
+                print("Finished fitting dg")
 
                 BEST_BASE_FJ_ADJ, _ = select_base_friedkin_johnsen_adjacency_lambda(run_traj, run_neighbors)
                 BASE_FJ_ADJ_L1 = BEST_BASE_FJ_ADJ['lambda1']
-                BASE_FJ_ADJ_FIT = fit_base_friedkin_johnson_adjency(run_traj, run_neighbors, BASE_FJ_ADJ_L1)
-                BASE_FJ_ADJ_GAMMA = BASE_FJ_ADJ_FIT.get('gamma', np.nan)
+                BASE_FJ_ADJ_GAMMA = BEST_BASE_FJ_ADJ['gamma']
+                BASE_FJ_ADJ_MSE = BEST_BASE_FJ_ADJ['mse_pool']
+                print("Finished fitting fj no bias")
 
                 BEST_FJ_ADJ, _ = select_friedkin_johnsen_adjacency_lambdas(run_traj, run_neighbors)
                 FJ_ADJ_L1 = BEST_FJ_ADJ['lambda1']
                 FJ_ADJ_L2 = BEST_FJ_ADJ['lambda2']
-                FJ_ADJ_FIT = fit_friedkin_johnsen_adjacency(run_traj, run_neighbors, FJ_ADJ_L1, FJ_ADJ_L2)
-                FJ_ADJ_GAMMA = FJ_ADJ_FIT.get('gamma', np.nan)
-                FJ_ADJ_BIAS = FJ_ADJ_FIT.get('bias', np.nan)
+                FJ_ADJ_GAMMA = BEST_FJ_ADJ['gamma']
+                FJ_ADJ_BIAS = BEST_FJ_ADJ['bias']
+                FJ_ADJ_MSE = BEST_FJ_ADJ['mse_pool']
+                print("Finished fitting fj with bias")
 
                 HOMOPHILY_FIT = fit_homophily(run_traj, run_neighbors, gamma0=1.0)
                 HOMOPHILY_GAMMA = HOMOPHILY_FIT.get('gamma', np.nan)
                 HOMOPHILY_LAMBDA = HOMOPHILY_FIT.get('lambda', np.nan)
+                print("Finished fitting homophily")
 
                 BEST_HOMO_FJ = fit_homophily_friedkin_johnsen(run_traj, run_neighbors, gamma0=HOMOPHILY_GAMMA)
                 BEST_HOMO_STUB = fit_homophily_stubborness(run_traj, run_neighbors, gamma0=HOMOPHILY_GAMMA)
@@ -214,6 +270,23 @@ if __name__ == '__main__':
                 HOMO_STUB_LSELF = BEST_HOMO_STUB.get('lambda_self', np.nan)
                 HOMO_STUB_L1 = BEST_HOMO_STUB.get('lambda1', np.nan)
                 HOMO_STUB_L2 = BEST_HOMO_STUB.get('lambda2', np.nan)
+                print("Finished fitting homophily")
+
+                print("Finished fitting")
+
+                # Save gamma-objective plots for each homophily model
+                gamma_plots_dir = combo_dir / 'gamma_objective_plots' / llm_name / topic_name
+                gamma_plots_dir.mkdir(parents=True, exist_ok=True)
+                for fit_obj, model_label in [
+                    (HOMOPHILY_FIT, 'homophily'),
+                    (BEST_HOMO_FJ, 'homophily_friedkin_johnsen'),
+                    (BEST_HOMO_STUB, 'homophily_stubbornness'),
+                ]:
+                    gmap = fit_obj.get('gamma_objective_map', {})
+                    fitted_gamma = float(fit_obj.get('gamma', np.nan))
+                    out_png = gamma_plots_dir / f'{model_label}_gamma_objective.png'
+                    save_gamma_objective_plot(gmap, fitted_gamma, model_label, out_png)
+                print(f'  Saved gamma-objective plots to: {gamma_plots_dir}')
 
                 def build_rollout_maps(traj_map, neighbors_map):
                     return {
@@ -228,8 +301,8 @@ if __name__ == '__main__':
                     },
                     'fj_adjacency_no_bias': {
                         run_name: base_friedkin_johnsen_adjacency_rollout(
-                            BASE_FJ_ADJ_FIT.get('gamma', np.nan) * build_row_normalized_adjacency(neighbors_map[run_name], n_agents)
-                            + (1.0 - BASE_FJ_ADJ_FIT.get('gamma', np.nan)) * np.eye(n_agents, dtype=float),
+                            BASE_FJ_ADJ_GAMMA * build_row_normalized_adjacency(neighbors_map[run_name], n_agents)
+                            + (1.0 - BASE_FJ_ADJ_GAMMA) * np.eye(n_agents, dtype=float),
                             np.asarray(traj_map[run_name], dtype=float)[0],
                             PARAMS['rollout_horizon_cap'],
                             BASE_FJ_ADJ_L1,
@@ -238,9 +311,9 @@ if __name__ == '__main__':
                     },
                     'fj_adjacency': {
                         run_name: friedkin_johnsen_adjacency_rollout(
-                            FJ_ADJ_FIT.get('gamma', np.nan) * build_row_normalized_adjacency(neighbors_map[run_name], n_agents)
-                            + (1.0 - FJ_ADJ_FIT.get('gamma', np.nan)) * np.eye(n_agents, dtype=float),
-                            FJ_ADJ_FIT.get('bias', np.nan),
+                            FJ_ADJ_GAMMA * build_row_normalized_adjacency(neighbors_map[run_name], n_agents)
+                            + (1.0 - FJ_ADJ_GAMMA) * np.eye(n_agents, dtype=float),
+                            FJ_ADJ_BIAS,
                             np.asarray(traj_map[run_name], dtype=float)[0],
                             PARAMS['rollout_horizon_cap'],
                             FJ_ADJ_L1,
@@ -307,9 +380,9 @@ if __name__ == '__main__':
                     if raw_model_name == 'degroot_adjacency_scalar':
                         summary_row['train_mse_pool'] = float(DEGROOT_ADJ['mse_pool'])
                     elif raw_model_name == 'fj_adjacency_no_bias':
-                        summary_row['train_mse_pool'] = float(BASE_FJ_ADJ_FIT['mse_pool'])
+                        summary_row['train_mse_pool'] = float(BASE_FJ_ADJ_MSE)
                     elif raw_model_name == 'fj_adjacency':
-                        summary_row['train_mse_pool'] = float(FJ_ADJ_FIT['mse_pool'])
+                        summary_row['train_mse_pool'] = float(FJ_ADJ_MSE)
                     elif raw_model_name == 'homophily':
                         summary_row['train_mse_pool'] = float(HOMOPHILY_FIT['mse_pool'])
                     elif raw_model_name == 'homophily_friedkin_johnsen':
