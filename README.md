@@ -2,41 +2,34 @@
 
 ## Project Summary
 
-This project provides a small multi-agent LLM network that uses Redis streams for messaging between agents. Each `NetworkAgent` listens on a Redis stream, generates responses using the OpenAI client, and publishes messages back to the stream. The repository includes a simple runner script and a Jupyter notebook to start and inspect conversations.
+This project investigates whether classical opinion-dynamics models can reproduce and forecast stance trajectories that emerge when LLM agents interact in social-media-style networks. The repository includes a configurable multi-agent social network simulator for generating realistic conversational data, along with implementations of classical opinion-dynamics models such as DeGroot, Friedkin–Johnsen, and homophily-based variants for fitting and forecasting agent behavior. We find that simple extensions, particularly incorporating agent bias toward innate opinions, substantially improve prediction accuracy across discussion topics and network structures.
 
 ## Requirements
 
-- Python 3.10+ recommended
-- Docker & Docker Compose
+- Python 3.10+ (recommended)
+- Docker & Docker Compose (optional; required to run the included Redis compose file).
 
-Install Python dependencies:
+Quick setup:
 
 ```bash
+python -m venv venv
+source venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-(See [requirements.txt](requirements.txt))
+See [requirements.txt](requirements.txt) for exact dependency versions and optional extras.
 
-## Start Redis (Docker)
+## Start Redis
 
-A Docker Compose file for Redis is included under the `network` folder. From the repository root, start the Redis service:
+A Docker Compose configuration for Redis is provided under the `network` folder. From the repository root, start the Redis service with:
 
 ```bash
-# Start Redis in the background (run from repository root)
 cd network
 docker compose up -d
 ```
 
-Note: If you prefer a single container run without compose, you can start Redis directly:
-
-```bash
-docker run -d --name redis -p 6379:6379 redis:7
-```
-
 ## Run the project
-
-There are two primary ways to run a conversation:
 
 - Script: run the main script
 
@@ -44,79 +37,27 @@ There are two primary ways to run a conversation:
 python main.py
 ```
 
-## Local HuggingFace embeddings (no server)
+## Embeddings and Data Collection
 
-When `USE_OPENAI_EMBEDDINGS=False` in [main.py](main.py), embeddings are computed locally using `sentence-transformers` with the model `vahidthegreat/StanceAware-SBERT`. No additional server is required.
+By default the code uses the OpenAI Embeddings API (set `USE_OPENAI_EMBEDDINGS=True` and provide `OPENAI_API_KEY`). A local sentence-transformers option is available (`USE_OPENAI_EMBEDDINGS=False`). 
 
-When `USE_OPENAI_EMBEDDINGS=True`, the system uses the OpenAI embeddings API and requires `OPENAI_API_KEY`.
+Embedded posts and related artifacts are written to Redis during runs and persisted as pipeline logs under `logs/`.
 
-## Exporting embeddings / latent space data
+Log folders and contents:
+- **logs/network_logs/**: Raw network event records including agent posts and embedding metadata for each post
+- **logs/topology_logs/**: Topology snapshots including network graph structuer and agent opinions. 
+- **logs/stance_logs/**: Agent initialization stance labels
+- **logs/agent_config_logs/**: Agent prompt initializations
 
-Embedded posts are persisted to Redis as JSON (including `vector`, `topic_similarity`, `stance_score`, `strength`, plus metadata like `sender_id`). Agent profiles are also stored as JSON under `agent_profile:agent_*`.
+## Tunable parameters
 
-To export the latest embeddings (and optionally profiles) to JSONL for analysis/sharing:
+The detailed, up-to-date tunable parameters live in the source files (these are the canonical locations):
 
-```bash
-python scripts/export_latent_space.py --topic "vaccines" --out latent.jsonl --export-profiles
-```
-
-Notes:
-- The default Redis DB is `1` (matching `network/cache.py`). Override with `--db` if needed.
-- The embedding list key is typically `embed:stance_embeddings:{topic}` when using the default `embed:` prefix.
-
-## Tunable Parameters
-
-The following are tunable parameters for the LLM-network. 
-#### Network Configuration in [main.py](./main.py)
-- `NUM_AGENTS` - Number of agents to instantiate in the network (controls scale).
-- `STREAM_NAME` - Redis stream key used for agent publish/consume.
-- `REDIS_HOST` - Host address for the Redis server.
-- `REDIS_PORT` - Port for the Redis server.
-- `RUN_DURATION_SECONDS` - How long the demo run should sleep before shutdown.
-- `USE_LOCAL_LLM` - If true, use the local HuggingFace LLM queue instead of OpenAI.
-
-#### LLM Based Stance Analysis in [main.py](./main.py)
-(Not critical for the network to run; off by default)
-- `ENABLE_STANCE_WORKER` - Toggle the background stance-labeling batch worker.
-- `STANCE_BATCH_SIZE` - Number of items processed per stance-worker batch.
-- `STANCE_BATCH_INTERVAL` - Seconds between stance-worker batch runs.
-
-#### Recommendation System Configurations in [main.py](./main.py)
-- `ENABLE_EMBEDDING_CONTEXT` - Enable embedding-based context/recommender (requires `OPENAI_API_KEY`).
-- `ROLLING_STORE_MAX_ITEMS` - Max items to retain in the rolling embedded store.
-- `CONTEXT_TOP_K` - Number of top-k retrieved items to include as generation context for agent (recommendation feed).
-- `PROFILE_WINDOW_SIZE` - Sliding window size for agent interaction history used to build profiles.
-- `PROFILE_SEED_WEIGHT` - Bootstrap-only seed weight for the init prompt; after the first weighted profile update, only the sliding authored-history window is used.
-- `TOPOLOGY_LOG_INTERVAL` - Seconds between topology snapshots written to logs.
-
-#### Agent parameters (defaults in `agents/network_agent.py`)
-- `log_recommendations` - Enable logging of top-k recommendations used for context.
-- `log_reco_debug` - Extra verbose debug logging for recommendation internals.
-- `log_reco_max_items` - Max number of recommendation entries to include in debug logs.
-- `regen_on_repeat` - Retry generation if output is too similar to recent posts.
-- `regen_max_attempts` - Maximum retries when `regen_on_repeat` is enabled.
-- `regen_similarity_threshold` - Similarity threshold above which output is considered a repeat.
-- `regen_history_last_n` - Number of recent posts used to check for repetition.
-
-#### Latent representation / recommend() knobs (`controller/stance_analysis/rolling_embedding_store.py`)
-- `top_k` - How many nearest neighbors to return for recommendations.
-- `min_topic_similarity` - Minimum topic-similarity score to consider an item relevant.
-- `min_strength` - Minimum opinion strength to include an item in candidates.
-- `exclude_sender_id` - Sender id to exclude from recommendations (e.g., current author) or blocking.
-- `alpha` - Weight for stance-distance term in composite distance.
-- `beta` - Weight for strength-distance term in composite distance.
-- `gamma` - Weight for semantic distance (embedding cosine) in composite distance.
-
-#### Agent ordering configs (`controller/order_manager.py`)
-- `ordering_mode` - Selection policy: `random` or `topology` (profile-based).
-- `echo_probability` - Probability to choose a similar (echo) responder vs. contrasting one.
-- `fairness_tau_s` - Time constant (seconds) used to prefer agents that haven't spoken recently.
-- `cooldown_s` - Per-agent cooldown (seconds) to avoid immediate re-selection.
-- `temperature` - Softmax temperature for probabilistic selection among scored candidates.
-- `sim_weight` - Weight applied to similarity when scoring candidates.
-- `fair_weight` - Weight given to fairness/recency in the selection score.
-- `extremeness_penalty` - Penalty for agents far from the population centroid (discourages extremes).
-- `explore_epsilon` - Small probability of pure random exploration when picking next agent.
+- Network and global flags: [main.py](main.py)
+- Agent configuration: [agents/network_agent.py](agents/network_agent.py)
+- Embedding and recommendation knobs: [controller/stance_analysis/rolling_embedding_store.py](controller/stance_analysis/rolling_embedding_store.py)
+- Ordering configuration: [controller/order_manager.py](controller/order_manager.py)
+- Agent post timing configurations: [controller/time_manager.py](controller/time_manager.py)
 
 ## Notes on Jupyter & Python versions
 
@@ -152,25 +93,29 @@ Top-level files and folders (click to open):
 	- `prompt_configs/`: Templates and topic data used to generate agent prompts.
 
 - [controller/](controller/) : Orchestration and analysis controllers.
-	- `time_manager.py`: Rate-limiting and publish locks.
+	- `time_manager.py`: Wait times for agent posts.
 	- `order_manager.py`: Logic to choose which agent replies next.
 	- `stance_worker.py`: Optional batch worker for stance labeling.
-	- `stance_analysis/`: Embedding analyzer, rolling store, profile store, topology tracking, and vector ops.
+	- `stance_analysis/`: Embedding analyzer, rolling store, profile store, and topology tracking.
 
 - [network/](network/) : Redis helpers and compose files.
 	- `cache.py`: Async Redis cache wrapper for storing agent message histories.
 	- `stream.py`: Redis stream helper used by agents for pub/sub and cleanup.
 	- `docker-compose.yml`: Quick way to run Redis locally for demos.
 
+- [modeling/](modeling/) : Data preparation, model fitters, ranking scripts, and plotting notebooks.
+	- `models/`: Model implementations (fixed-graph and adjacency-based fitters) and helpers.
+	- `generate_model_rankings.py`: Batch runner for fitting and exporting model rankings.
+	- `plots.ipynb`: Notebook for visualizing fit results.
+	- `plot_utils.py`: Helper scripts for plotting.
+
 - [logs/](logs/) : Runtime logs and topology outputs.
 	- `network_logs/`, `topology_logs/`, `stance_logs/`, `agent_config_logs/` for collected artifacts.
 
 - [tests/](tests/) : Diagnostic and integration-style tests you can run as scripts.
-	- `agent_profile_test.py`, `embedding_reco_test.py`, `stance_test.py` — test with more in-depth examples to gauge stance analysis.
+	- `agent_profile_test.py`, `embedding_reco_test.py`, `stance_test.py` — tests to gauge stance analysis.
 
 - `main.py` : The primary script that mirrors the notebook runner (full end-to-end run).
-- `llm_network.ipynb` : Notebook version of the runner (interactive, split into steps for inspection).
 - `requirements.txt` : Python dependencies.
-- `README.md` : This file.
 
 
