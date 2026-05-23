@@ -270,10 +270,11 @@ if __name__ == '__main__':
                 print("Finished fitting homophily")
 
                 BEST_HOMO_FJ = fit_homophily_friedkin_johnsen(run_traj, run_neighbors, gamma0=HOMOPHILY_GAMMA)
-                BEST_HOMO_STUB = fit_homophily_stubborness(run_traj, run_neighbors, gamma0=HOMOPHILY_GAMMA)
                 HOMO_FJ_GAMMA = BEST_HOMO_FJ.get('gamma', np.nan)
                 HOMO_FJ_L1 = BEST_HOMO_FJ.get('lambda1', np.nan)
                 HOMO_FJ_LSELF = BEST_HOMO_FJ.get('lambda_self', np.nan)
+
+                BEST_HOMO_STUB = fit_homophily_stubborness(run_traj, run_neighbors, gamma0=HOMOPHILY_GAMMA)
                 HOMO_STUB_GAMMA = BEST_HOMO_STUB.get('gamma', np.nan)
                 HOMO_STUB_LSELF = BEST_HOMO_STUB.get('lambda_self', np.nan)
                 HOMO_STUB_L1 = BEST_HOMO_STUB.get('lambda1', np.nan)
@@ -422,6 +423,65 @@ if __name__ == '__main__':
                 combo_csv = combo_dir / f'{llm_name}__{topic_name}_model_rankings.csv'
                 combo_df.to_csv(combo_csv, index=False)
                 print(f'  Saved per-combo table to: {combo_csv}')
+
+                # generate a separate per-run CSV comprising the optimal fitted parameters from the 
+                #  fitting code
+                optimal_params_rows = []
+                for raw_model_name in rollout_maps_test.keys():
+                    if raw_model_name == 'degroot_adjacency_scalar':
+                        optimal_params_rows.append({
+                            'model': MODEL_DISPLAY_NAMES.get(raw_model_name, raw_model_name),
+                            'social_weight': float(DEGROOT_GAMMA),
+                            'self_weight': 1.0 - float(DEGROOT_GAMMA),
+                        })
+                    elif raw_model_name == 'fj_adjacency_no_bias':
+                        optimal_params_rows.append({
+                            'model': MODEL_DISPLAY_NAMES.get(raw_model_name, raw_model_name),
+                            'social_weight': float(BASE_FJ_ADJ_GAMMA) * (1.0 - float(BASE_FJ_ADJ_L1)),
+                            'self_weight': (1.0 - float(BASE_FJ_ADJ_GAMMA)) * (1.0 - float(BASE_FJ_ADJ_L1)),
+                            'init_weight': float(BASE_FJ_ADJ_L1),
+                        })
+                    elif raw_model_name == 'fj_adjacency':
+                        optimal_params_rows.append({
+                            'model': MODEL_DISPLAY_NAMES.get(raw_model_name, raw_model_name),
+                            'social_weight': float(FJ_ADJ_GAMMA) *(1.0 - float(FJ_ADJ_L1) - float(FJ_ADJ_L2)),
+                            'self_weight': (1.0 - float(FJ_ADJ_GAMMA)) * (1.0 - float(FJ_ADJ_L1) - float(FJ_ADJ_L2)),
+                            'init_weight': float(FJ_ADJ_L1),
+                            'bias_weight': float(FJ_ADJ_L2),
+                            'bias': float(FJ_ADJ_BIAS),
+                        })
+                    elif raw_model_name == 'homophily':
+                        optimal_params_rows.append({
+                            'model': MODEL_DISPLAY_NAMES.get(raw_model_name, raw_model_name),
+                            'self_weight': float(HOMOPHILY_LAMBDA),
+                            'social_weight': 1.0 - float(HOMOPHILY_LAMBDA),
+                            'gamma': float(HOMOPHILY_GAMMA),
+                        })
+                    elif raw_model_name == 'homophily_friedkin_johnsen':
+                        optimal_params_rows.append({
+                            'model': MODEL_DISPLAY_NAMES.get(raw_model_name, raw_model_name),
+                            'init_weight': float(HOMO_FJ_L1),
+                            'self_weight': float(HOMO_FJ_LSELF),
+                            'social_weight': 1.0 - float(HOMO_FJ_LSELF) - float(HOMO_FJ_L1),
+                            'gamma': float(HOMO_FJ_GAMMA),
+                        })
+                    elif raw_model_name == 'homophily_stubbornness':
+                        optimal_params_rows.append({
+                            'model': MODEL_DISPLAY_NAMES.get(raw_model_name, raw_model_name),
+                            'init_weight': float(HOMO_STUB_L1),
+                            'bias_weight': float(HOMO_STUB_L2),
+                            'bias': float(BEST_HOMO_STUB.get('bias', np.nan)),
+                            'self_weight': float(HOMO_STUB_LSELF),
+                            'social_weight': 1.0 - float(HOMO_STUB_LSELF) - float(HOMO_STUB_L2) - float(HOMO_STUB_L1),
+                            'gamma': float(HOMO_STUB_GAMMA),
+                        })
+                    else:
+                        raise Exception
+
+                optimal_params_df = pd.DataFrame(optimal_params_rows)
+                params_csv = combo_dir / f'{llm_name}__{topic_name}_fitted_params.csv'
+                optimal_params_df.to_csv(params_csv, index=False)
+                print(f'  Saved fitted params to: {params_csv}')
 
             except Exception as e:
                 print(f'  Evaluation failed: {str(e)[:200]}')
