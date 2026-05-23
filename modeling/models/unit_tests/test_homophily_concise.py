@@ -11,9 +11,6 @@ from modeling.models.adjacency_based.homophily import (
     fit_homophily,
     fit_homophily_friedkin_johnsen,
     fit_homophily_stubborness,
-    rollout_with_homophily,
-    rollout_with_homophily_friedkin_johnsen,
-    rollout_with_homophily_stubborness,
 )
 from modeling.models.data_prep import build_expected_message_matrix
 
@@ -417,4 +414,4 @@ class TestStubbornHomophilyRecovery(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    unittest.main()

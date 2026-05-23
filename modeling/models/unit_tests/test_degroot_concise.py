@@ -9,7 +9,6 @@ if str(ROOT) not in sys.path:
 
 from modeling.models.adjacency_based.degroot import (
     fit_degroot_adjacency_scalar,
-    degroot_rollout_prediction,
 )
 from modeling.models.data_prep import build_expected_message_matrix
 

@@ -9,11 +9,7 @@ if str(ROOT) not in sys.path:
 
 from modeling.models.adjacency_based.friedkin_johnsen import (
     fit_base_friedkin_johnsen_adjacency_joint,
-    fit_base_friedkin_johnson_adjency,
-    base_friedkin_johnsen_adjacency_rollout,
-    fit_friedkin_johnsen_adjacency,
     fit_friedkin_johnsen_adjacency_joint,
-    friedkin_johnsen_adjacency_rollout,
     select_friedkin_johnsen_adjacency_lambdas,
     select_base_friedkin_johnsen_adjacency_lambda,
 )
@@ -209,8 +205,6 @@ class TestBaseFJRecovery(unittest.TestCase):
         fit = fit_base_friedkin_johnsen_adjacency_joint(run_traj, run_neighbors)
         self.assertAlmostEqual(fit['lambda1'], l1,  delta=1e-4)
         self.assertAlmostEqual(fit['gamma'],   gam, delta=1e-4)
-
-# READ UP TO HERE BEFORE SUGGESTING CHANGES. The rest of the file is new and should be reviewed in its entirety, not line-by-line.
 
 # ===========================================================================
 # Parameter recovery: Full FJ

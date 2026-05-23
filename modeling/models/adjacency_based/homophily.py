@@ -469,18 +469,16 @@ def rollout_with_homophily(
     horizon: int,
     *,
     lambda_self: float = 0.0,
-    lambda1: float = 0.0,
 ) -> Array:
-    if lambda_self < 0 or lambda1 < 0 or (lambda_self + lambda1) > 1:
-        raise ValueError("lambda_self and lambda1 must be nonnegative and satisfy lambda_self + lambda1 <= 1")
+    if lambda_self < 0 or lambda_self > 1:
+        raise ValueError("lambda_self must be nonnegative and less than or equal to 1")
 
     Abar = np.asarray(Abar, dtype=float)
     x_init = sanitize_array(np.asarray(x0, dtype=float).ravel())
     current = x_init.copy()
     predictions = [current.copy()]
     self_weight = float(lambda_self)
-    init_weight = float(lambda1)
-    homo_weight = 1.0 - self_weight - init_weight
+    homo_weight = 1.0 - self_weight
 
     for _ in range(int(horizon)):
         diff = np.abs(current[:, None] - current[None, :])
@@ -490,7 +488,7 @@ def rollout_with_homophily(
         valid = row_sums[:, 0] > 0
         w[valid] = raw[valid] / row_sums[valid]
         homophily_part = w @ current
-        current = self_weight * current + init_weight * x_init + homo_weight * homophily_part
+        current = self_weight * current + homo_weight * homophily_part
         predictions.append(current.copy())
 
     return np.asarray(predictions, dtype=float)
