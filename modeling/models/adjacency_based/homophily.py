@@ -118,6 +118,8 @@ def fit_homophily(
     ])
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
 
+    total_points = np.shape(y_pool)[0] * np.shape(y_pool)[1]
+
     return {
         "name": "homophily",
         "gamma": gamma_hat,
@@ -134,6 +136,7 @@ def fit_homophily(
         "success": bool(best_result["success"]),
         "nit": int(best_result["nit"]),
         "objective": float(best_result["objective"]),
+        "total_points": total_points
     }
 
 
@@ -264,6 +267,8 @@ def fit_homophily_friedkin_johnsen(
     ])
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
 
+    total_points = np.shape(y_pool)[0] * np.shape(y_pool)[1]
+
     return {
         "name": "homophily_friedkin_johnsen",
         "gamma": gamma_hat,
@@ -281,6 +286,7 @@ def fit_homophily_friedkin_johnsen(
         "success": bool(best_result["success"]),
         "nit": int(best_result["nit"]),
         "objective": float(best_result["objective"]),
+        "total_points": total_points,
     }
 
 
@@ -440,6 +446,8 @@ def fit_homophily_stubborness(
     ])
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
 
+    total_points = np.shape(y_pool)[0] * np.shape(y_pool)[1]
+
     return {
         "name": "homophily_stubborness",
         "gamma": gamma_hat,
@@ -459,6 +467,7 @@ def fit_homophily_stubborness(
         "success": bool(best_result["success"]),
         "nit": int(best_result["nit"]),
         "objective": float(best_result["objective"]),
+        "total_points": total_points,
     }
 
 

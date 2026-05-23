@@ -75,6 +75,9 @@ def fit_degroot_adjacency_scalar(run_traj_map, run_neighbors):
     abar_map = {run_names[i]: abar_blocks[i] for i in range(len(run_names))}
     w_map = {run_names[i]: w_blocks[i] for i in range(len(run_names))}
 
+    # compute total data points from which we fit
+    total_points = np.shape(y_pool)[0] * np.shape(y_pool)[1]
+
     return {
         "name": "degroot_adjacency_scalar",
         "gamma": gamma_hat,
@@ -86,6 +89,7 @@ def fit_degroot_adjacency_scalar(run_traj_map, run_neighbors):
         "mse_pool": mse_pool,
         "status": problem.status,
         "objective": float(problem.value) if problem.value is not None else np.nan,
+        "total_points": total_points,
     }
 
 

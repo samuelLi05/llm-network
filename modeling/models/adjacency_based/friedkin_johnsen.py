@@ -103,6 +103,8 @@ def fit_base_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, eps=1
     fitted_pool = np.vstack(fitted_blocks)
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
 
+    total_points = np.shape(y_pool)[0] * np.shape(y_pool)[1]
+
     return {
         "lambda1": lambda1_hat,
         "alpha": alpha_hat,
@@ -115,6 +117,7 @@ def fit_base_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, eps=1
         "mse_pool": mse_pool,
         "status": problem.status,
         "objective": float(problem.value) if problem.value is not None else np.nan,
+        "total_points": total_points,
     }
 
 
@@ -343,6 +346,8 @@ def fit_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, eps=1e-9):
     fitted_pool = np.vstack(fitted_blocks)
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
 
+    total_points = np.shape(y_pool)[0] * np.shape(y_pool)[1]
+
     return {
         "lambda1": lambda1_hat,
         "lambda2": lambda2_hat,
@@ -358,6 +363,7 @@ def fit_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, eps=1e-9):
         "mse_pool": mse_pool,
         "status": problem.status,
         "objective": float(problem.value) if problem.value is not None else np.nan,
+        "total_points": total_points,
     }
 
 
@@ -419,6 +425,7 @@ def select_friedkin_johnsen_adjacency_lambdas(run_traj_map, run_neighbors, lambd
             "mse_pool": float(adj_result["mse_pool"]),
             "gamma": float(adj_result["gamma"]),
             "bias": float(adj_result["bias"]),
+            "total_points": int(adj_result["total_points"]),
         }
         return best_result, [best_result]
 
@@ -460,5 +467,6 @@ def select_base_friedkin_johnsen_adjacency_lambda(run_traj_map, run_neighbors, l
             "lambda1": float(adj_result["lambda1"]),
             "mse_pool": float(adj_result["mse_pool"]),
             "gamma": float(adj_result["gamma"]),
+            "total_points": int(adj_result["total_points"]),
         }
         return best_result, [best_result]

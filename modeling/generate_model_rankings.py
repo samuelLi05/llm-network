@@ -248,12 +248,14 @@ if __name__ == '__main__':
                 #LAMBDA_GRID = np.linspace(0.0, 1.0, 50)
                 DEGROOT_ADJ = fit_degroot_adjacency_scalar(run_traj, run_neighbors)
                 DEGROOT_GAMMA = DEGROOT_ADJ.get('gamma', np.nan)
+                TOTAL_POINTS_DG = int(DEGROOT_ADJ.get('total_points', 0))
                 print("Finished fitting dg")
 
                 BEST_BASE_FJ_ADJ, _ = select_base_friedkin_johnsen_adjacency_lambda(run_traj, run_neighbors)
                 BASE_FJ_ADJ_L1 = BEST_BASE_FJ_ADJ['lambda1']
                 BASE_FJ_ADJ_GAMMA = BEST_BASE_FJ_ADJ['gamma']
                 BASE_FJ_ADJ_MSE = BEST_BASE_FJ_ADJ['mse_pool']
+                TOTAL_POINTS_FJ = int(BEST_BASE_FJ_ADJ.get('total_points', 0))
                 print("Finished fitting fj no bias")
 
                 BEST_FJ_ADJ, _ = select_friedkin_johnsen_adjacency_lambdas(run_traj, run_neighbors)
@@ -262,26 +264,34 @@ if __name__ == '__main__':
                 FJ_ADJ_GAMMA = BEST_FJ_ADJ['gamma']
                 FJ_ADJ_BIAS = BEST_FJ_ADJ['bias']
                 FJ_ADJ_MSE = BEST_FJ_ADJ['mse_pool']
+                TOTAL_POINTS_FJ_BIAS = int(BEST_FJ_ADJ.get('total_points', 0))
                 print("Finished fitting fj with bias")
 
                 HOMOPHILY_FIT = fit_homophily(run_traj, run_neighbors, gamma0=1.0)
                 HOMOPHILY_GAMMA = HOMOPHILY_FIT.get('gamma', np.nan)
                 HOMOPHILY_LAMBDA = HOMOPHILY_FIT.get('lambda', np.nan)
+                TOTAL_POINTS_HOMOPHILY = int(HOMOPHILY_FIT.get('total_points', 0))
                 print("Finished fitting homophily")
 
                 BEST_HOMO_FJ = fit_homophily_friedkin_johnsen(run_traj, run_neighbors, gamma0=HOMOPHILY_GAMMA)
                 HOMO_FJ_GAMMA = BEST_HOMO_FJ.get('gamma', np.nan)
                 HOMO_FJ_L1 = BEST_HOMO_FJ.get('lambda1', np.nan)
                 HOMO_FJ_LSELF = BEST_HOMO_FJ.get('lambda_self', np.nan)
+                TOTAL_POINTS_HOMOPHILY_FJ = int(BEST_HOMO_FJ.get('total_points', 0))
 
                 BEST_HOMO_STUB = fit_homophily_stubborness(run_traj, run_neighbors, gamma0=HOMOPHILY_GAMMA)
                 HOMO_STUB_GAMMA = BEST_HOMO_STUB.get('gamma', np.nan)
                 HOMO_STUB_LSELF = BEST_HOMO_STUB.get('lambda_self', np.nan)
                 HOMO_STUB_L1 = BEST_HOMO_STUB.get('lambda1', np.nan)
                 HOMO_STUB_L2 = BEST_HOMO_STUB.get('lambda2', np.nan)
+                TOTAL_POINTS_HOMOPHILY_STUB = int(BEST_HOMO_STUB.get('total_points', 0))
                 print("Finished fitting homophily")
 
                 print("Finished fitting")
+
+                # raise exception if total points don't match
+                if not (TOTAL_POINTS_DG == TOTAL_POINTS_FJ == TOTAL_POINTS_FJ_BIAS == TOTAL_POINTS_HOMOPHILY == TOTAL_POINTS_HOMOPHILY_FJ == TOTAL_POINTS_HOMOPHILY_STUB):
+                    raise ValueError("Total points do not match across models")
 
                 # Save gamma-objective plots for each homophily model
                 gamma_plots_dir = combo_dir / 'gamma_objective_plots' / llm_name / topic_name
@@ -433,6 +443,7 @@ if __name__ == '__main__':
                             'model': MODEL_DISPLAY_NAMES.get(raw_model_name, raw_model_name),
                             'social_weight': float(DEGROOT_GAMMA),
                             'self_weight': 1.0 - float(DEGROOT_GAMMA),
+                            'total_points': TOTAL_POINTS_DG,
                         })
                     elif raw_model_name == 'fj_adjacency_no_bias':
                         optimal_params_rows.append({
@@ -440,6 +451,7 @@ if __name__ == '__main__':
                             'social_weight': float(BASE_FJ_ADJ_GAMMA) * (1.0 - float(BASE_FJ_ADJ_L1)),
                             'self_weight': (1.0 - float(BASE_FJ_ADJ_GAMMA)) * (1.0 - float(BASE_FJ_ADJ_L1)),
                             'init_weight': float(BASE_FJ_ADJ_L1),
+                            'total_points': TOTAL_POINTS_FJ,
                         })
                     elif raw_model_name == 'fj_adjacency':
                         optimal_params_rows.append({
@@ -449,6 +461,7 @@ if __name__ == '__main__':
                             'init_weight': float(FJ_ADJ_L1),
                             'bias_weight': float(FJ_ADJ_L2),
                             'bias': float(FJ_ADJ_BIAS),
+                            'total_points': TOTAL_POINTS_FJ_BIAS,
                         })
                     elif raw_model_name == 'homophily':
                         optimal_params_rows.append({
@@ -456,6 +469,7 @@ if __name__ == '__main__':
                             'self_weight': float(HOMOPHILY_LAMBDA),
                             'social_weight': 1.0 - float(HOMOPHILY_LAMBDA),
                             'gamma': float(HOMOPHILY_GAMMA),
+                            'total_points': TOTAL_POINTS_HOMOPHILY,
                         })
                     elif raw_model_name == 'homophily_friedkin_johnsen':
                         optimal_params_rows.append({
@@ -464,6 +478,7 @@ if __name__ == '__main__':
                             'self_weight': float(HOMO_FJ_LSELF),
                             'social_weight': 1.0 - float(HOMO_FJ_LSELF) - float(HOMO_FJ_L1),
                             'gamma': float(HOMO_FJ_GAMMA),
+                            'total_points': TOTAL_POINTS_HOMOPHILY_FJ,
                         })
                     elif raw_model_name == 'homophily_stubbornness':
                         optimal_params_rows.append({
@@ -474,12 +489,16 @@ if __name__ == '__main__':
                             'self_weight': float(HOMO_STUB_LSELF),
                             'social_weight': 1.0 - float(HOMO_STUB_LSELF) - float(HOMO_STUB_L2) - float(HOMO_STUB_L1),
                             'gamma': float(HOMO_STUB_GAMMA),
+                            'total_points': TOTAL_POINTS_HOMOPHILY_STUB,
                         })
                     else:
                         raise Exception
 
+
                 optimal_params_df = pd.DataFrame(optimal_params_rows)
-                params_csv = combo_dir / f'{llm_name}__{topic_name}_fitted_params.csv'
+                params_dir = combo_dir / 'fitted_params'
+                params_dir.mkdir(parents=True, exist_ok=True)
+                params_csv = params_dir / f'{llm_name}__{topic_name}_fitted_params.csv'
                 optimal_params_df.to_csv(params_csv, index=False)
                 print(f'  Saved fitted params to: {params_csv}')
 
