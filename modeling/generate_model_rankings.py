@@ -70,6 +70,18 @@ def stack_curves(curves):
 
 
 def evaluate_model(model_name, run_traj_map, rollout_map):
+    run_names = sorted(run_traj_map.keys())
+
+    # Determine T_eval globally: shortest trajectory across all runs, capped by
+    # rollout length. This ensures every per-run metric and every integral is
+    # computed on an identical time axis so they are comparable.
+    T_eval = min(
+        min(np.asarray(run_traj_map[rn], dtype=float).shape[0] for rn in run_names),
+        min(np.asarray(rollout_map[rn], dtype=float).shape[0] for rn in run_names),
+    )
+    
+    print(f'    Evaluating {model_name} on {len(run_names)} runs, using T_eval={T_eval}.')
+
     per_run_rows = []
     observed_curves = []
     predicted_curves = []
@@ -79,30 +91,26 @@ def evaluate_model(model_name, run_traj_map, rollout_map):
     var_pred_curves = []
     wasserstein_curves = []
 
-    for run_name in sorted(run_traj_map.keys()):
-        observed = np.asarray(run_traj_map[run_name], dtype=float)
-        predicted = np.asarray(rollout_map[run_name], dtype=float)
-        t_common = min(observed.shape[0], predicted.shape[0])
-        observed = observed[:t_common]
-        predicted = predicted[:t_common]
+    for run_name in run_names:
+        observed = np.asarray(run_traj_map[run_name], dtype=float)[:T_eval]
+        predicted = np.asarray(rollout_map[run_name], dtype=float)[:T_eval]
 
         mean_true = np.mean(observed, axis=1)
         mean_pred = np.mean(predicted, axis=1)
         var_true = np.var(observed, axis=1)
         var_pred = np.var(predicted, axis=1)
-        # fallback: if modeling/plot_utils exists, adjust import; otherwise compute stub
         try:
             from modeling.plot_utils import compute_wasserstein_distance_per_timestep
             wasserstein = compute_wasserstein_distance_per_timestep(observed, predicted)
         except Exception:
-            wasserstein = np.abs(mean_pred - mean_true)  # fallback
+            raise RuntimeError("Failed to compute Wasserstein distance. ")
         mean_error = np.abs(mean_pred - mean_true)
         var_error = np.abs(var_pred - var_true)
 
         per_run_rows.append({
             'model': model_name,
             'run_name': run_name,
-            'run_length': int(t_common - 1),
+            'run_length': int(T_eval - 1),
             'run_max_wasserstein': float(np.max(wasserstein)) if wasserstein.size else np.nan,
             'run_integral_wasserstein': float(np.sum(wasserstein)) if wasserstein.size else np.nan,
             'run_max_mean_error': float(np.max(mean_error)) if mean_error.size else np.nan,
@@ -138,9 +146,9 @@ def evaluate_model(model_name, run_traj_map, rollout_map):
     }
 
     return {
-        'per_run': per_run,
-        'summary': summary,
-        'observed_stack': stack_curves(observed_curves),
+        'per_run': per_run,                                         # per run data frame
+        'summary': summary,                                         # summary dict with mean/var of each metric across runs
+        'observed_stack': stack_curves(observed_curves),            
         'predicted_stack': stack_curves(predicted_curves),
         'mean_true_stack': stack_curves(mean_true_curves),
         'mean_pred_stack': stack_curves(mean_pred_curves),
