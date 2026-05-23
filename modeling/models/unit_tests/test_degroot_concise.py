@@ -1,13 +1,3 @@
-"""Concise unit tests for fit_degroot_adjacency_scalar and degroot_rollout_prediction.
-
-Covers (one representative case per concept):
-  - Output contract (keys, ranges, row-stochastic W)
-  - Gamma recovery across 4 topologies (subTest sweep) + random sparse
-  - Multiple runs: shared graph and per-run different graphs
-  - Low-noise robustness
-  - Rollout shape and consistency
-"""
-
 import unittest
 import numpy as np
 import sys
