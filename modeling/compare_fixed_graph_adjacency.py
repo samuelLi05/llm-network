@@ -17,6 +17,17 @@ from modeling.models.adjacency_based.friedkin_johnsen import(
     friedkin_johnsen_adjacency_rollout
 )
 
+from modeling.models.adjacency_based.homophily import (
+    fit_homophily_stubborness,
+    rollout_with_homophily_stubborness
+)
+
+from modeling.models.fixed_graph.homophily import (
+    fit_fg_fj_bias_homophily,
+    _build_supports,
+    rollout_fg_fj_bias_homophily
+)
+
 from modeling.models.fixed_graph.friedkin_johnsen import(
     fit_friedkin_johnsen_joint_traj0
 )
@@ -30,6 +41,8 @@ MODEL_DISPLAY_NAMES = {
     'fj_adj': 'Friedkin-Johnsen (low-parameter)',
     'fj_fg': 'Friedkin-Johnsen (high-parameter)',
     'fj_fg_ngc': 'Friedkin-Johnsen (high-parameter, no graph constraints)',
+    'hom_fj_b_adj': 'Homophily + Friedkin-Johnsen with bias (low-parameter)',
+    'hom_fj_b_fg': 'Homophily + Friedkin-Johnsen with bias (high-parameter)',
 }
 
 PARAMS = {
@@ -48,7 +61,7 @@ if __name__ == '__main__':
     combo_dir = ROOT / 'fixed_graph_adjacency_comparison'
     combo_dir.mkdir(parents=True, exist_ok=True)
 
-    llm_name = 'TBD'
+    llm_name = 'gemma3'
     topic_name = 'vaccines'
 
 
@@ -57,16 +70,16 @@ if __name__ == '__main__':
     
     train_run_dirs = sorted([p for p in train_path.iterdir() if p.is_dir()])
     try:
-        run_data = {r.name: load_run_data(r) for r in train_run_dirs}
-        global_agent_ids = sorted({a for d in run_data.values() for a in d['agent_ids']}, key=_numeric_agent_key)
+        run_data_train = {r.name: load_run_data(r) for r in train_run_dirs}
+        global_agent_ids = sorted({a for d in run_data_train.values() for a in d['agent_ids']}, key=_numeric_agent_key)
         n_agents = len(global_agent_ids)
-        traj_mask = {rn: build_run_trajectory(d, global_agent_ids, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=True, constrain_messages=PARAMS['constrain_messages']) for rn, d in run_data.items()}
-        run_traj = {rn: tm[0] for rn, tm in traj_mask.items()}
-        run_neighbors = {rn: build_neighbors_index(d, global_agent_ids) for rn, d in run_data.items()}
+        traj_mask_train = {rn: build_run_trajectory(d, global_agent_ids, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=True, constrain_messages=PARAMS['constrain_messages']) for rn, d in run_data_train.items()}
+        run_traj_train = {rn: tm[0] for rn, tm in traj_mask_train.items()}
+        run_neighbors_train = {rn: build_neighbors_index(d, global_agent_ids) for rn, d in run_data_train.items()}
 
         # validte that run neighbors are consistent ACROSS runs
-        for rn, nbrs in run_neighbors.items():
-            for other_rn, other_nbrs in run_neighbors.items():
+        for rn, nbrs in run_neighbors_train.items():
+            for other_rn, other_nbrs in run_neighbors_train.items():
                 if rn == other_rn:
                     continue
                 assert nbrs == other_nbrs, f"Neighbors differ between runs {rn} and {other_rn}"
@@ -78,36 +91,83 @@ if __name__ == '__main__':
     # Fit adjacency-based and fixed graph models
     try:
         # Fit Fj adjacency model with bias
-        BEST_FJ_ADJ, _ = select_friedkin_johnsen_adjacency_lambdas(run_traj, run_neighbors)
-        FJ_ADJ_L1 = BEST_FJ_ADJ['lambda1']
-        FJ_ADJ_L2 = BEST_FJ_ADJ['lambda2']
-        print("Best fj adjacency lambdas: lambda1 = ", FJ_ADJ_L1, " lambda2 = ", FJ_ADJ_L2)
-        FJ_ADJ_GAMMA = BEST_FJ_ADJ['gamma']
+        BEST_FJ_ADJ, _ = select_friedkin_johnsen_adjacency_lambdas(run_traj_train, run_neighbors_train)
+        FJ_ADJ_INIT_WEIGHT = BEST_FJ_ADJ['lambda1']
+        FJ_ADJ_BIAS_WEIGHT = BEST_FJ_ADJ['lambda2']
+        FJ_ADJ_SOC_WGAMMA = BEST_FJ_ADJ['gamma']
         FJ_ADJ_BIAS = BEST_FJ_ADJ['bias']
         FJ_ADJ_MSE = BEST_FJ_ADJ['mse_pool']
         TOTAL_POINTS_FJ_BIAS = int(BEST_FJ_ADJ.get('total_points', 0))
         print("Finished fitting fj with bias with fixed adjacency matrices; MSE = ", FJ_ADJ_MSE, " with total points = ", TOTAL_POINTS_FJ_BIAS)
 
         # Fit fixed graph friedkin johnsen model
-        BEST_FJ_FG = fit_friedkin_johnsen_joint_traj0(run_traj, run_neighbors, turn_off_graph_constraints=False)
-        FJ_FG_LAMBDA1 = BEST_FJ_FG['lambda1']
-        FJ_FG_LAMBDA2 = BEST_FJ_FG['lambda2']
-        print("Best fj fixed graph lambdas: lambda1 = ", FJ_FG_LAMBDA1, " lambda2 = ", FJ_FG_LAMBDA2)
+        BEST_FJ_FG = fit_friedkin_johnsen_joint_traj0(run_traj_train, run_neighbors_train, turn_off_graph_constraints=False)
+        FJ_FG_INIT_WEIGHT = BEST_FJ_FG['lambda1']
+        FJ_FG_BIAS_WEIGHT = BEST_FJ_FG['lambda2']
         FJ_FG_MSE = BEST_FJ_FG['mse_pool']
         FJ_FG_BIAS = BEST_FJ_FG['b']
         FJ_FG_W = BEST_FJ_FG['W']
         TOTAL_POINTS_FJ_FG = int(BEST_FJ_FG.get('total_points', 0))
         print("Finished fitting fj with a free adjacency matrix; MSE = ", FJ_FG_MSE, " with total points = ", TOTAL_POINTS_FJ_FG)
 
-        BEST_FJ_FG_NO_GRAPH_CONSTRAINT = fit_friedkin_johnsen_joint_traj0(run_traj, run_neighbors, turn_off_graph_constraints=True)
-        FJ_FG_NO_GRAPH_CONSTRAINT_LAMBDA1 = BEST_FJ_FG_NO_GRAPH_CONSTRAINT['lambda1']
-        FJ_FG_NO_GRAPH_CONSTRAINT_LAMBDA2 = BEST_FJ_FG_NO_GRAPH_CONSTRAINT['lambda2']
-        print("Best fj fixed graph NO GRAPH CONSTRAINT lambdas: lambda1 = ", FJ_FG_NO_GRAPH_CONSTRAINT_LAMBDA1, " lambda2 = ", FJ_FG_NO_GRAPH_CONSTRAINT_LAMBDA2)
+        BEST_FJ_FG_NO_GRAPH_CONSTRAINT = fit_friedkin_johnsen_joint_traj0(run_traj_train, run_neighbors_train, turn_off_graph_constraints=True)
+        FJ_FG_NO_GRAPH_CONSTRAINT_INIT_WEIGHT = BEST_FJ_FG_NO_GRAPH_CONSTRAINT['lambda1']
+        FJ_FG_NO_GRAPH_CONSTRAINT_BIAS_WEIGHT = BEST_FJ_FG_NO_GRAPH_CONSTRAINT['lambda2']
         FJ_FG_NO_GRAPH_CONSTRAINT_MSE = BEST_FJ_FG_NO_GRAPH_CONSTRAINT['mse_pool']
         FJ_FG_NO_GRAPH_CONSTRAINT_BIAS = BEST_FJ_FG_NO_GRAPH_CONSTRAINT['b']
         FJ_FG_NO_GRAPH_CONSTRAINT_W = BEST_FJ_FG_NO_GRAPH_CONSTRAINT['W']
         TOTAL_POINTS_FJ_FG_NO_GRAPH_CONSTRAINT = int(BEST_FJ_FG_NO_GRAPH_CONSTRAINT.get('total_points', 0))
         print("Finished fitting fj with a free adjacency matrix and no graph constraints; MSE = ", FJ_FG_NO_GRAPH_CONSTRAINT_MSE, " with total points = ", TOTAL_POINTS_FJ_FG_NO_GRAPH_CONSTRAINT)
+
+        # Fit fj + bias + homophily model using adjacency
+        BEST_HOMO_STUB_ADJ = fit_homophily_stubborness(run_traj_train, run_neighbors_train)
+        HOMO_STUB_ADJ_GAMMA = BEST_HOMO_STUB_ADJ.get('gamma', np.nan)
+        HOMO_STUB_ADJ_LSELF = BEST_HOMO_STUB_ADJ.get('lambda_self', np.nan)
+        HOMO_STUB_ADJ_INIT_WEIGHT = BEST_HOMO_STUB_ADJ.get('lambda1', np.nan)
+        HOMO_STUB_ADJ_BIAS_WEIGHT = BEST_HOMO_STUB_ADJ.get('lambda2', np.nan)
+        HOMO_STUB_ADJ_BIAS = BEST_HOMO_STUB_ADJ.get('bias', np.nan)
+        HOMO_STUB_ADJ_MSE = BEST_HOMO_STUB_ADJ.get('mse_pool', np.nan)
+        print("Finished fitting fj with bias and homophily with fixed adjacency matrices; MSE = ", HOMO_STUB_ADJ_MSE, "; GAMMA = ", HOMO_STUB_ADJ_GAMMA)
+        
+
+        # extract optimal Friedkin_johnsen solution as initialization for homophily fits
+        run_names = sorted(run_traj_train.keys())
+        n = len(run_neighbors_train[run_names[0]])
+        # check that n = 30, as expected for these experiments
+        assert n == 30, f"Expected 30 agents, but got {n}"
+        supports, support_sizes = _build_supports(run_neighbors_train[run_names[0]], n)
+        
+        # parse W from FJ bias FG fitting into form for homophily fit
+        W_as_param_from_fg_fj_b = []
+
+        for i,support in enumerate(supports):
+            row = FJ_FG_W[i, support]
+            # check that row is stochastic
+            assert np.isclose(np.sum(row), 1.0), f"Row {i} is not stochastic: {row}"
+            W_as_param_from_fg_fj_b.append(row)
+
+        W_as_param_from_fg_fj_b = np.concatenate(W_as_param_from_fg_fj_b)
+        # validation: _W_to_support_params function from tests, and check that it matches
+        from modeling.models.unit_tests.test_homophily_fixed_graph import _W_to_support_params
+        W_as_param_from_fg_fj_b_validation = _W_to_support_params(FJ_FG_W, run_neighbors_train[run_names[0]], n)
+        assert np.allclose(W_as_param_from_fg_fj_b, W_as_param_from_fg_fj_b_validation), "Parsed W parameters do not match validation "
+
+        init_param_vec = np.concatenate(
+            ([0.0 , 1.0 - FJ_FG_INIT_WEIGHT - FJ_FG_BIAS_WEIGHT, FJ_FG_INIT_WEIGHT, FJ_FG_BIAS_WEIGHT*FJ_FG_BIAS], W_as_param_from_fg_fj_b)
+        )
+        init_param_vec_nz_gamma = init_param_vec.copy()
+        init_param_vec_nz_gamma[0] = 0.1  # set gamma to small positive value
+
+        # Fit fj + bias + homophily under fixed graph assumption
+        BEST_HOMO_STUB_FG = fit_fg_fj_bias_homophily(run_traj_train, run_neighbors_train, init_mode="random", n_random_starts=10, extra_starts=[init_param_vec, init_param_vec_nz_gamma])
+        HOMO_STUB_FG_W = BEST_HOMO_STUB_FG["W"]
+        HOMO_STUB_FG_GAMMA = BEST_HOMO_STUB_FG["gamma"]
+        HOMO_STUB_FG_LAMBDA_HOMO = BEST_HOMO_STUB_FG["lambda1"]
+        HOMO_STUB_FG_LAMBDA_INIT = BEST_HOMO_STUB_FG["lambda2"]
+        HOMO_STUB_FG_BIAS_TILDE = BEST_HOMO_STUB_FG["bias_tilde"]
+        HOMO_STUB_FG_MSE = BEST_HOMO_STUB_FG.get('mse_pool', np.nan)
+        print("Finished fitting fj with bias and homophily under fixed graph assumption; MSE = ", HOMO_STUB_FG_MSE, ' GAMMA = ', BEST_HOMO_STUB_FG.get('gamma', np.nan))
+
 
     except Exception as e:
         print(f'Error fitting models: {str(e)[:120]}')
@@ -126,7 +186,7 @@ if __name__ == '__main__':
                     continue
                 assert nbrs == other_nbrs, f"Test neighbors differ between runs {rn} and {other_rn}"
             # also check against train neighbors
-            for train_rn, train_nbrs in run_neighbors.items():
+            for train_rn, train_nbrs in run_neighbors_train.items():
                 assert nbrs == train_nbrs, f"Test neighbors in run {rn} differ from train neighbors in run {train_rn}"
 
 
@@ -135,13 +195,13 @@ if __name__ == '__main__':
             return {
                 'fj_adj': {
                     run_name: friedkin_johnsen_adjacency_rollout(
-                        FJ_ADJ_GAMMA* build_row_normalized_adjacency(neighbors_map[run_name], n_agents) 
-                        + (1.0 - FJ_ADJ_GAMMA) * np.eye(n_agents),
+                        FJ_ADJ_SOC_WGAMMA* build_row_normalized_adjacency(neighbors_map[run_name], n_agents) 
+                        + (1.0 - FJ_ADJ_SOC_WGAMMA) * np.eye(n_agents),
                         FJ_ADJ_BIAS,
                         np.asarray(traj_map[run_name], dtype=float)[0],
                         PARAMS['rollout_horizon_cap'],
-                        FJ_ADJ_L1,
-                        FJ_ADJ_L2,
+                        FJ_ADJ_INIT_WEIGHT,
+                        FJ_ADJ_BIAS_WEIGHT,
                     )
                     for run_name in traj_map.keys()
                 },
@@ -152,8 +212,8 @@ if __name__ == '__main__':
                         FJ_FG_BIAS,
                         np.asarray(traj_map[run_name], dtype=float)[0],
                         PARAMS['rollout_horizon_cap'],
-                        FJ_FG_LAMBDA1,
-                        FJ_FG_LAMBDA2,
+                        FJ_FG_INIT_WEIGHT,
+                        FJ_FG_BIAS_WEIGHT,
                     )
                     for run_name in traj_map.keys()
                 },
@@ -163,11 +223,36 @@ if __name__ == '__main__':
                         FJ_FG_NO_GRAPH_CONSTRAINT_BIAS,
                         np.asarray(traj_map[run_name], dtype=float)[0],
                         PARAMS['rollout_horizon_cap'],
-                        FJ_FG_NO_GRAPH_CONSTRAINT_LAMBDA1,
-                        FJ_FG_NO_GRAPH_CONSTRAINT_LAMBDA2,
+                        FJ_FG_NO_GRAPH_CONSTRAINT_INIT_WEIGHT,
+                        FJ_FG_NO_GRAPH_CONSTRAINT_BIAS_WEIGHT,
                     )
                     for run_name in traj_map.keys()
                 },
+                'hom_fj_b_adj': {
+                    run_name: rollout_with_homophily_stubborness(
+                        build_row_normalized_adjacency(neighbors_map[run_name], n_agents),
+                        HOMO_STUB_ADJ_GAMMA,
+                        HOMO_STUB_ADJ_BIAS,
+                        HOMO_STUB_ADJ_INIT_WEIGHT,
+                        HOMO_STUB_ADJ_BIAS_WEIGHT,
+                        np.asarray(traj_map[run_name], dtype=float)[0],
+                        PARAMS['rollout_horizon_cap'],
+                        lambda_self=HOMO_STUB_ADJ_LSELF
+                    )
+                    for run_name in traj_map.keys()
+                },
+                'hom_fj_b_fg': {
+                    run_name: rollout_fg_fj_bias_homophily(
+                        HOMO_STUB_FG_W,
+                        HOMO_STUB_FG_GAMMA,
+                        np.asarray(traj_map[run_name], dtype=float)[0],
+                        PARAMS['rollout_horizon_cap'],
+                        bias_tilde = HOMO_STUB_FG_BIAS_TILDE,
+                        lambda1 = HOMO_STUB_FG_LAMBDA_HOMO,
+                        lambda2 = HOMO_STUB_FG_LAMBDA_INIT
+                    )
+                    for run_name in traj_map.keys()
+                }
             }
 
 
@@ -191,6 +276,12 @@ if __name__ == '__main__':
                 summary_row['train_mse_pool'] = float(FJ_ADJ_MSE)
             elif raw_model_name == 'fj_fg':
                 summary_row['train_mse_pool'] = float(FJ_FG_MSE)
+            elif raw_model_name == 'fj_fg_ngc':
+                summary_row['train_mse_pool'] = float(FJ_FG_NO_GRAPH_CONSTRAINT_MSE)
+            elif raw_model_name == 'hom_fj_b_adj':
+                summary_row['train_mse_pool'] = float(HOMO_STUB_ADJ_MSE)
+            elif raw_model_name == 'hom_fj_b_fg':
+                summary_row['train_mse_pool'] = float(HOMO_STUB_FG_MSE)
             summary_row.update({'raw_model': raw_model_name, 'model': MODEL_DISPLAY_NAMES.get(raw_model_name, raw_model_name)})
             summary_rows.append(summary_row)
 
