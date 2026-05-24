@@ -278,6 +278,7 @@ if __name__ == '__main__':
                 HOMO_FJ_L1 = BEST_HOMO_FJ.get('lambda1', np.nan)
                 HOMO_FJ_LSELF = BEST_HOMO_FJ.get('lambda_self', np.nan)
                 TOTAL_POINTS_HOMOPHILY_FJ = int(BEST_HOMO_FJ.get('total_points', 0))
+                print("Finished fitting homophily Friedkin Johnsen")
 
                 BEST_HOMO_STUB = fit_homophily_stubborness(run_traj, run_neighbors, gamma0=HOMOPHILY_GAMMA)
                 HOMO_STUB_GAMMA = BEST_HOMO_STUB.get('gamma', np.nan)
@@ -285,9 +286,7 @@ if __name__ == '__main__':
                 HOMO_STUB_L1 = BEST_HOMO_STUB.get('lambda1', np.nan)
                 HOMO_STUB_L2 = BEST_HOMO_STUB.get('lambda2', np.nan)
                 TOTAL_POINTS_HOMOPHILY_STUB = int(BEST_HOMO_STUB.get('total_points', 0))
-                print("Finished fitting homophily")
-
-                print("Finished fitting")
+                print("Finished fitting homophily Friedkin Johnsen with bias")
 
                 # raise exception if total points don't match
                 if not (TOTAL_POINTS_DG == TOTAL_POINTS_FJ == TOTAL_POINTS_FJ_BIAS == TOTAL_POINTS_HOMOPHILY == TOTAL_POINTS_HOMOPHILY_FJ == TOTAL_POINTS_HOMOPHILY_STUB):

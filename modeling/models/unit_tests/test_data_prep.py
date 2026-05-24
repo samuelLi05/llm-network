@@ -41,6 +41,14 @@ class TestAdjacencyMatrices(unittest.TestCase):
         M = build_expected_message_matrix(nbrs,n)
         np.testing.assert_allclose(A, M, atol=1e-6)
 
+        """Repeat for random graphs"""
+        for _ in range(5):
+            n = rng.integers(10, 50)
+            nbrs = {i: rng.choice([j for j in range(n) if j != i], size=rng.integers(1, n//4), replace=False).tolist() for i in range(n)}
+            A = build_row_normalized_adjacency(nbrs,n)
+            M = build_expected_message_matrix(nbrs,n)
+            np.testing.assert_allclose(A, M, atol=1e-6)
+
 
 if __name__ == '__main__':
     unittest.main()
