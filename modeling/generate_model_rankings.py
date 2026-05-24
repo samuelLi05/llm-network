@@ -234,8 +234,8 @@ if __name__ == '__main__':
                 run_traj = {rn: tm[0] for rn, tm in traj_mask.items()}
                 run_neighbors = {rn: build_neighbors_index(d, global_agents) for rn, d in run_data.items()}
             except Exception as e:
-                print(f'  Fit failed: {str(e)[:120]}')
-                # still continue to next topic
+                print(f' Error loading run data: {str(e)[:120]}')
+                raise e
 
             # Build test rollouts using fitted params (best-effort)
             try:

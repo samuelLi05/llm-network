@@ -200,7 +200,7 @@ def select_friedkin_johnsen_lambdas(run_traj_map, run_neighbors, lambda_grid, ag
     return best_result, all_results
 
 
-def fit_friedkin_johnsen_joint(run_traj_map, run_neighbors, agent_inits, eps=1e-4):
+def fit_friedkin_johnsen_joint(run_traj_map, run_neighbors, eps=1e-4):
     run_names = sorted(run_traj_map.keys())
     ref_neighbors = run_neighbors[run_names[0]]
 
@@ -210,18 +210,20 @@ def fit_friedkin_johnsen_joint(run_traj_map, run_neighbors, agent_inits, eps=1e-
 
     x_blocks = []
     y_blocks = []
+    x0_blocks = []
 
     for rn in run_names:
         traj = np.asarray(run_traj_map[rn], dtype=float)
         x, y = build_dataset_from_run(traj)
         x_blocks.append(x)
         y_blocks.append(y)
+        x0_blocks.append(np.repeat(traj[0].reshape(1, -1), x.shape[0], axis=0))
 
     x_pool = np.vstack(x_blocks)
     y_pool = np.vstack(y_blocks)
+    x0_pool = np.vstack(x0_blocks)
+
     _, n = x_pool.shape
-    x0_init = build_x0_from_agent_inits(agent_inits, n)
-    x0_pool = np.repeat(x0_init.reshape(1, -1), x_pool.shape[0], axis=0)
 
     lambda1 = cp.Variable(nonneg=True)
     lambda2 = cp.Variable(nonneg=True)
@@ -233,25 +235,32 @@ def fit_friedkin_johnsen_joint(run_traj_map, run_neighbors, agent_inits, eps=1e-
     residual = y_pool - (lambda1 * x0_pool + b_tilde * ones_n[None, :] + x_pool @ w_tilde.T)
     objective = cp.Minimize(cp.sum_squares(residual))
     constraints = [
-        lambda2 >= eps,
-        lambda1 >= 0.2,
-        lambda1 + lambda2 <= 1.0 - eps,
-        lambda1 <= 1.0,
+        lambda2 >= 0,
+        lambda1 >= 0,
+        lambda1 + lambda2 <= 1.0,
     ]
 
     for i in range(n):
         ns = ref_neighbors[i]
         allowed = np.zeros((n,), dtype=float)
         allowed[np.asarray(ns, dtype=int)] = 1.0
+        # Always allow self-loop: the adjacency model includes a u*I term giving
+        # each agent weight on its own current opinion.  Without this, FG is
+        # strictly less expressive than adjacency-based FJ.
+        allowed[i] = 1.0
 
         constraints.append(w_tilde[i, :] >= 0)
         constraints.append(cp.sum(w_tilde[i, :]) == alpha)
-        constraints.append(cp.multiply(1.0 - allowed, w_tilde[i, :]) == 0)
+        # for j in range(n):
+        #     if allowed[j] == 0.0:
+        #         constraints.append(w_tilde[i, j] == 0)
+        # constraints.append(cp.multiply(1.0 - allowed, w_tilde[i, :]) == 0)
+        # breakpoint()
 
     constraints += [b_tilde <= lambda2, b_tilde >= -lambda2]
 
     prob = cp.Problem(objective, constraints)
-    prob.solve(solver=cp.OSQP)
+    prob.solve(solver=cp.OSQP, eps_abs=1e-9, eps_rel=1e-9, verbose=False)
 
     if lambda1.value is None or lambda2.value is None or w_tilde.value is None or b_tilde.value is None:
         raise RuntimeError("Joint FJ optimization failed to produce a solution.")
@@ -263,13 +272,16 @@ def fit_friedkin_johnsen_joint(run_traj_map, run_neighbors, agent_inits, eps=1e-
     w_tilde_hat = np.asarray(w_tilde.value, dtype=float)
 
     if alpha_hat <= eps:
-        raise RuntimeError(f"Estimated alpha too small for stable W recovery: alpha={alpha_hat}")
-
-    w_hat = w_tilde_hat / alpha_hat
+        # optimal social interaction weight is 0, return identity W
+        w_hat = np.eye(n, dtype=float)
+    else:
+        w_hat = w_tilde_hat / alpha_hat
     b_hat = b_tilde_hat / lambda2_hat
 
     fitted_pool = lambda1_hat * x0_pool + b_tilde_hat * ones_n[None, :] + x_pool @ w_tilde_hat.T
     mse_pool = float(np.mean((y_pool - fitted_pool) ** 2))
+
+    total_points = np.shape(y_pool)[0] * np.shape(y_pool)[1]
 
     return {
         "lambda1": lambda1_hat,
@@ -285,6 +297,7 @@ def fit_friedkin_johnsen_joint(run_traj_map, run_neighbors, agent_inits, eps=1e-
         "mse_pool": mse_pool,
         "status": prob.status,
         "objective": float(prob.value) if prob.value is not None else np.nan,
+        "total_points": total_points,
     }
 
 
@@ -358,7 +371,8 @@ def fit_friedkin_johnsen_no_bias_joint(run_traj_map, run_neighbors, agent_inits,
     }
 
 
-def fit_friedkin_johnsen_joint_traj0(run_traj_map, run_neighbors, eps=1e-4):
+def fit_friedkin_johnsen_joint_traj0(run_traj_map, run_neighbors, eps=1e-4,
+                                     turn_off_graph_constraints=False):
     run_names = sorted(run_traj_map.keys())
     ref_neighbors = run_neighbors[run_names[0]]
 
@@ -389,18 +403,20 @@ def fit_friedkin_johnsen_joint_traj0(run_traj_map, run_neighbors, eps=1e-4):
     ones_n = np.ones((n,), dtype=float)
     residual = y_pool - (lambda1 * x0_pool + b_tilde * ones_n[None, :] + x_pool @ w_tilde.T)
     objective = cp.Minimize(cp.sum_squares(residual))
-    constraints = [lambda2 >= eps, lambda1 + lambda2 <= 1.0 - eps, lambda1 <= 1.0]
+    constraints = [lambda2 >= 0.0, lambda1 + lambda2 <= 1.0 , lambda1 <= 1.0]
 
     for i in range(n):
         ns = ref_neighbors[i]
         allowed = np.zeros((n,), dtype=float)
         allowed[np.asarray(ns, dtype=int)] = 1.0
+        allowed[i] = 1.0
         constraints.append(w_tilde[i, :] >= 0)
         constraints.append(cp.sum(w_tilde[i, :]) == alpha)
-        constraints.append(cp.multiply(1.0 - allowed, w_tilde[i, :]) == 0)
+        if not(turn_off_graph_constraints):
+            constraints.append(cp.multiply(1.0 - allowed, w_tilde[i, :]) == 0)
     constraints += [b_tilde <= lambda2, b_tilde >= -lambda2]
     prob = cp.Problem(objective, constraints)
-    prob.solve(solver=cp.OSQP)
+    prob.solve(solver=cp.OSQP, eps_abs=1e-6, eps_rel=1e-6)
 
     if lambda1.value is None or lambda2.value is None or w_tilde.value is None or b_tilde.value is None:
         raise RuntimeError("Joint FJ traj0 optimization failed to produce a solution.")
