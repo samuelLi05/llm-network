@@ -480,6 +480,7 @@ def fit_fg_fj_bias_homophily(
         "success": bool(result.success),
         "nit": solver_iters,
         "objective": float(objective_value),
+        "theta_opt": np.asarray(result.x, dtype=float)
     }
 
 
