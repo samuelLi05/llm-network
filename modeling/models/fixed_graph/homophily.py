@@ -74,6 +74,8 @@ def _build_supports(ref_neighbors: Dict[int, List[int]], n: int) -> Tuple[List[n
             ns = np.asarray([i], dtype=int)
         elif i not in ns:
             ns = np.append(ns, i)
+            # sort to ensure consistent ordering of supports
+            ns = np.sort(ns)
         supports.append(ns)
         support_sizes.append(int(ns.size))
 
@@ -399,6 +401,10 @@ def fit_fg_fj_bias_homophily(
         lambda_init = float(theta[2])
         b_tilde = float(theta[3])  # b_tilde = lambda2 * b  (optimised directly)
         row_params = theta[4:]
+
+        # raise exception if row_params size doesn't match row_size
+        if row_params.size != row_size:
+            raise ValueError(f"Invalid parameters: row_params size {row_params.size} does not match expected row_size {row_size}.")
 
         w_hat = _build_row_stochastic_W(_split_row_params(row_params, support_sizes), supports, n)
         homo_pool = _evaluate_pool(x_pool, w_hat, gamma_val)

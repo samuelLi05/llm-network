@@ -231,18 +231,8 @@ class TestFgFjBiasHomophily(unittest.TestCase):
             run_traj = _sim_fg_fj_bias_homophily(rng, W_true, gamma_true, lambda_h_true, lambda_i_true, lambda_b_true, bias_true, n_runs=n_runs, horizon=horizon)
             run_neighbors = {f"run_{r:02d}": neighbors for r in range(n_runs)}
 
-            # construct optimal W by masking to neighbors + identity
-            W_as_param =[]
-            for i in range(n):
-                row = np.zeros(len(neighbors[i])+1, dtype=float)
-                # check i not in neighbors[i], 
-                assert i not in neighbors[i], f"Self-loop should not be in neighbors[{i}] for this test, but is present. Got neighbors[{i}] = {neighbors[i]}"
-                idx_map = {j: idx for idx, j in enumerate(neighbors[i] + [i])}
-                for j in neighbors[i]:
-                    row[idx_map[j]] = W_true[i, j]
-                row[idx_map[i]] = W_true[i, i]
-                W_as_param.append(row)
-            W_as_param = np.concatenate(W_as_param)
+            supports, support_sizes = _build_supports(neighbors, n)
+            W_as_param = np.concatenate([W_true[i, support] for i, support in enumerate(supports)])
 
             true_param_vec = np.concatenate(([gamma_true, lambda_h_true, lambda_i_true, lambda_b_true * bias_true], W_as_param))
             fit_result = fit_fg_fj_bias_homophily(run_traj, run_neighbors, fixed_start=true_param_vec)
@@ -283,17 +273,11 @@ class TestFgFjBiasHomophily(unittest.TestCase):
         W_true = _random_W(neighbors, n, rng)
         run_traj = _sim_fg_fj_bias_homophily(rng, W_true, gamma_true, lambda_h_true, lambda_i_true, lambda_b_true, bias_true, n_runs=n_runs, horizon=horizon)
         run_neighbors = {f"run_{r:02d}": neighbors for r in range(n_runs)}
-        W_as_param =[]
-        for i in range(n):
-            row = np.zeros(len(neighbors[i])+1, dtype=float)
-            # check i not in neighbors[i], 
-            assert i not in neighbors[i], f"Self-loop should not be in neighbors[{i}] for this test, but is present. Got neighbors[{i}] = {neighbors[i]}"
-            idx_map = {j: idx for idx, j in enumerate(neighbors[i] + [i])}
-            for j in neighbors[i]:
-                row[idx_map[j]] = W_true[i, j]
-            row[idx_map[i]] = W_true[i, i]
-            W_as_param.append(row)
-        W_as_param = np.concatenate(W_as_param)
+
+
+        supports, support_sizes = _build_supports(neighbors, n)
+        W_as_param = np.concatenate([W_true[i, support] for i, support in enumerate(supports)])
+
         true_param_vec = np.concatenate(([gamma_true, lambda_h_true, lambda_i_true, lambda_b_true * bias_true], W_as_param))
         fit_result = fit_fg_fj_bias_homophily(run_traj, run_neighbors, fixed_start=true_param_vec)
         mse = fit_result["mse_pool"]
