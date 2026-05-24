@@ -4,6 +4,7 @@ from typing import Callable, Dict, List, Tuple
 
 import numpy as np
 from scipy.optimize import minimize
+from tqdm import tqdm
 
 from modeling.models.data_prep import(
     build_dataset_from_run, 
@@ -68,8 +69,11 @@ def _build_supports(ref_neighbors: Dict[int, List[int]], n: int) -> Tuple[List[n
 
     for i in range(n):
         ns = np.asarray(ref_neighbors[i], dtype=int)
+        # make sure each node has at least self-loop support
         if ns.size == 0:
             ns = np.asarray([i], dtype=int)
+        elif i not in ns:
+            ns = np.append(ns, i)
         supports.append(ns)
         support_sizes.append(int(ns.size))
 
@@ -127,11 +131,13 @@ def _run_multistart(
     starts: List[Array],
     bounds: List[Tuple[float | None, float | None]],
     constraints: Tuple[dict, ...] = (),
+    show_progress: bool = True,
 ) -> Tuple[object, float]:
     best_result = None
     best_value = float("inf")
 
-    for start in starts:
+    iterable = tqdm(starts, desc="multistart", leave=False) if show_progress else starts
+    for start in iterable:
         result = minimize(
             objective,
             np.asarray(start, dtype=float),
@@ -365,6 +371,8 @@ def fit_fg_fj_bias_homophily(
     init_mode: str = "uniform",
     n_random_starts: int = 10,
     random_seed: int = 0,
+    fixed_start: Array | None = None,
+    show_progress: bool = True,
 ) -> Dict[str, object]:
     """init_mode: 'grid' (deterministic sweep), 'uniform' (all-ones W, uniform scalars),
     or 'random' (fully random starts via _random_start_fg_fj_bias)."""
@@ -425,7 +433,9 @@ def fit_fg_fj_bias_homophily(
         [gamma_base * 10.0, 0.95, 0.20,  1.00],
         [gamma_base * 12.0, 1.00, 0.00,  0.00],
     ]
-    if init_mode == "random":
+    if fixed_start is not None:
+        starts = [np.asarray(fixed_start, dtype=float)]
+    elif init_mode == "random":
         starts = [_random_start_fg_fj_bias(support_sizes, rng) for _ in range(n_random_starts)]
     elif init_mode == "uniform":
         starts = [np.concatenate((scalars, uniform_row)) for scalars in scalar_grid]
@@ -438,7 +448,7 @@ def fit_fg_fj_bias_homophily(
         {"type": "ineq", "fun": lambda theta: 1.0 - float(theta[1]) - float(theta[2]) + float(theta[3])},
     )
 
-    result, objective_value = _run_multistart(objective_fn, starts, bounds, constraints)
+    result, objective_value = _run_multistart(objective_fn, starts, bounds, constraints, show_progress=show_progress)
 
     gamma_hat = float(result.x[0])
     lambda_homophily_hat = float(result.x[1])
