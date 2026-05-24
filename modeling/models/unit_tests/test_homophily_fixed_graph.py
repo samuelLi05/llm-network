@@ -235,6 +235,8 @@ class TestFgFjBiasHomophily(unittest.TestCase):
             W_as_param =[]
             for i in range(n):
                 row = np.zeros(len(neighbors[i])+1, dtype=float)
+                # check i not in neighbors[i], 
+                assert i not in neighbors[i], f"Self-loop should not be in neighbors[{i}] for this test, but is present. Got neighbors[{i}] = {neighbors[i]}"
                 idx_map = {j: idx for idx, j in enumerate(neighbors[i] + [i])}
                 for j in neighbors[i]:
                     row[idx_map[j]] = W_true[i, j]
@@ -284,6 +286,8 @@ class TestFgFjBiasHomophily(unittest.TestCase):
         W_as_param =[]
         for i in range(n):
             row = np.zeros(len(neighbors[i])+1, dtype=float)
+            # check i not in neighbors[i], 
+            assert i not in neighbors[i], f"Self-loop should not be in neighbors[{i}] for this test, but is present. Got neighbors[{i}] = {neighbors[i]}"
             idx_map = {j: idx for idx, j in enumerate(neighbors[i] + [i])}
             for j in neighbors[i]:
                 row[idx_map[j]] = W_true[i, j]
@@ -302,6 +306,54 @@ class TestFgFjBiasHomophily(unittest.TestCase):
         np.testing.assert_allclose(fit_result["W"], W_true, atol=self.TOL_RANDOM_START)
         print(f"Large n run finished with MSE = ", mse)
 
+
+
+    def test_improves_on_init(self):
+
+        # Generate 5 random sparse graphs with n=10 and in-degree=3, and simulate noiseless trajectories with known parameters.
+        # Then, initialize from a range of random start points, and check that the fitted parameters
+        # have lower MSE than the initial parameters.
+
+        n = 10
+        in_degree = 3
+        n_runs = 3
+        horizon = 15
+        gamma_true = 0.4
+        lambda_h_true = 0.5
+        lambda_i_true = 0.3
+        lambda_b_true = 0.2
+        bias_true = 0.1
+        rng = np.random.default_rng(42)
+
+        for r in range(n_runs):
+            neighbors = _random_sparse(n, in_degree, rng)
+            W_true = _random_W(neighbors, n, rng)
+            run_traj = _sim_fg_fj_bias_homophily(rng, W_true, gamma_true, lambda_h_true, lambda_i_true, lambda_b_true, bias_true, n_runs=n_runs, horizon=horizon)
+            run_neighbors = {f"run_{r:02d}": neighbors for r in range(n_runs)}
+
+            obj = _make_objective_fn(run_traj, run_neighbors)
+            # randomly sample initial parameters from the space
+            gamma_init = rng.uniform(0.0, 1.0)
+            lambda_h_init = rng.uniform(0.0, 1.0)
+            lambda_i_init = rng.uniform(0.0, 1.0)
+            b_tilde_init = rng.uniform(-1.0, 1.0)
+            gamma_init, lambda_h_init, lambda_i_init, b_tilde_init = _project_scalar_params(gamma_init, lambda_h_init, lambda_i_init, b_tilde_init)
+            row_params_init = []
+            for i in range(n):
+                # append i if not present in neighbors[i] to account for self-loop
+                # check i not in neighbors[i], 
+                support = neighbors[i] + [i] if i not in neighbors[i] else neighbors[i]
+                w = rng.uniform(size=len(support))
+                w /= w.sum()
+                row_params_init.append(w)
+
+            row_params_init = np.concatenate(row_params_init)
+            init_param_vec = np.concatenate(([gamma_init, lambda_h_init, lambda_i_init, b_tilde_init], row_params_init))
+            mse_init = obj(init_param_vec)
+            fit_result = fit_fg_fj_bias_homophily(run_traj, run_neighbors, extra_starts=[init_param_vec], init_mode="random", n_random_starts=3)
+            mse_fitted = fit_result["mse_pool"]
+            self.assertLess(mse_fitted, mse_init, f"Fitted MSE {mse_fitted} is not less than initial MSE {mse_init}")
+            print(f"Run {r} finished with initial MSE = {mse_init} and fitted MSE = {mse_fitted}")
 
     PERT_NOISE = 1e-3
     PERT_TOL = 1e-3

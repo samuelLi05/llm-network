@@ -372,6 +372,7 @@ def fit_fg_fj_bias_homophily(
     n_random_starts: int = 10,
     random_seed: int = 0,
     fixed_start: Array | None = None,
+    extra_starts: List[Array] | None = None,
     show_progress: bool = True,
 ) -> Dict[str, object]:
     """init_mode: 'grid' (deterministic sweep), 'uniform' (all-ones W, uniform scalars),
@@ -441,6 +442,8 @@ def fit_fg_fj_bias_homophily(
         starts = [np.concatenate((scalars, uniform_row)) for scalars in scalar_grid]
     else:  
         raise ValueError(f"Invalid init_mode: {init_mode}. Must be 'grid', 'uniform', or 'random'.")
+    if extra_starts is not None:
+        starts = list(starts) + [np.asarray(s, dtype=float) for s in extra_starts]
     bounds = [(EPS, None), (0.0, 1.0), (0.0, 1.0), (-1.0, 1.0)] + [(EPS, None)] * row_size
 
     constraints = (
