@@ -159,7 +159,7 @@ def evaluate_model(model_name, run_traj_map, rollout_map):
 
 
 def save_gamma_objective_plot(gamma_objective_map: dict, fitted_gamma: float, model_name: str, out_path: Path) -> None:
-    """Save a 3-panel plot of gamma vs objective: linear-linear, x-log, x-log y-log."""
+    """Save a 3-panel plot of gamma vs objective: linear-linear, x-log"""
     if not gamma_objective_map:
         return
     gammas = sorted(gamma_objective_map.keys())
@@ -295,6 +295,8 @@ if __name__ == '__main__':
                 # Save gamma-objective plots for each homophily model
                 gamma_plots_dir = combo_dir / 'gamma_objective_plots' / llm_name / topic_name
                 gamma_plots_dir.mkdir(parents=True, exist_ok=True)
+                gamma_csv_dir = combo_dir / 'gamma_objective_data' / llm_name / topic_name
+                gamma_csv_dir.mkdir(parents=True, exist_ok=True)
                 for fit_obj, model_label in [
                     (HOMOPHILY_FIT, 'homophily'),
                     (BEST_HOMO_FJ, 'homophily_friedkin_johnsen'),
@@ -304,7 +306,16 @@ if __name__ == '__main__':
                     fitted_gamma = float(fit_obj.get('gamma', np.nan))
                     out_png = gamma_plots_dir / f'{model_label}_gamma_objective.png'
                     save_gamma_objective_plot(gmap, fitted_gamma, model_label, out_png)
+                    if gmap and model_label == 'homophily_stubbornness':
+                        gmap_df = pd.DataFrame(
+                            sorted(gmap.items()), columns=['gamma', 'objective_mse']
+                        )
+                        gmap_df['fitted_gamma'] = fitted_gamma
+                        gmap_df.to_csv(
+                            gamma_csv_dir / f'{model_label}_gamma_objective.csv', index=False
+                        )
                 print(f'  Saved gamma-objective plots to: {gamma_plots_dir}')
+                print(f'  Saved gamma-objective CSVs to: {gamma_csv_dir}')
 
                 def build_rollout_maps(traj_map, neighbors_map):
                     return {
