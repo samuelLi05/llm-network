@@ -293,10 +293,12 @@ def build_row_normalized_adjacency(neighbors, n):
         row_neighbors = list(neighbors[i])
         if len(row_neighbors) == 0:
             a[i, i] = 1.0
+            raise Exception("No sources for agent i")
             continue
         row_neighbors = [j for j in row_neighbors if 0 <= j < n]
         if len(row_neighbors) == 0:
             a[i, i] = 1.0
+            raise Exception("No sources for agent i")
             continue
         a[i, row_neighbors] = 1.0 / len(row_neighbors)
     return a
