@@ -32,13 +32,13 @@ NUM_AGENTS = 30
 STREAM_NAME = "agent_stream"
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
-RUN_DURATION_SECONDS = 1200 # 3 hours
+RUN_DURATION_SECONDS = 2000 # 3 hours
 USE_LOCAL_LLM = False
 # Manually edit these globals to switch between a local Ollama endpoint and the OpenAI API.
 LLM_API_BACKEND = "ollama"
 OPENAI_MODEL = "gpt-4o-mini"
 OPENAI_BASE_URL = None
-OLLAMA_MODEL = "gemma4:e4b"
+OLLAMA_MODEL = "gemma3:4b"
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
 OLLAMA_API_KEY = "ollama"
 ENABLE_STANCE_WORKER = False
@@ -63,7 +63,7 @@ STARTUP_CONCURRENCY = 25
 
 # Stance statement for intializeing with a baseline stance
 USE_BASELINE_STATEMENT = True
-BASELINE_STATEMENT = "Vaccines cause austim"
+BASELINE_STATEMENT = "Vaccines cause autism."
 BASELINE_TOPIC = "Vaccine safety and autism"
 
 # Seed for assigning baseline stances to agents
@@ -76,7 +76,7 @@ INITIAL_CONDITION_MODE = os.getenv("INITIAL_CONDITION_MODE", "uniform")
 # Separate seed for sampling stance weights within a mode (lets you run multiple replicates).
 INITIAL_CONDITION_SEED = int(os.getenv("INITIAL_CONDITION_SEED", "1234"))
 # Connection graph selection and seed.
-GRAPH_TYPE = os.getenv("GRAPH_TYPE", "community").strip().lower()
+GRAPH_TYPE = "chung-lu"
 GRAPH_SEED = 42
 GRAPH_MIN_DEGREE = 8
 

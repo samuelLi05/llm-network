@@ -24,7 +24,7 @@ class _OllamaChatCompletionsProxy:
 
             # Inject think=false unless explicitly provided
             #extra_body.setdefault("think", False)
-            return self._client.chat.completions.create(*args, extra_body=extra_body, **kwargs)
+            return self._client.chat.completions.create(*args, **kwargs)
         finally:
             _OLLAMA_CALL_SEMAPHORE.release()
 
