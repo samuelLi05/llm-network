@@ -32,7 +32,7 @@ NUM_AGENTS = 30
 STREAM_NAME = "agent_stream"
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
-RUN_DURATION_SECONDS = 1200 # 3 hours
+RUN_DURATION_SECONDS = 2000
 USE_LOCAL_LLM = False
 # Manually edit these globals to switch between a local Ollama endpoint and the OpenAI API.
 LLM_API_BACKEND = "ollama"
