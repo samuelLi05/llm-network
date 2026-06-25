@@ -63,7 +63,7 @@ STARTUP_CONCURRENCY = 25
 
 # Stance statement for intializeing with a baseline stance
 USE_BASELINE_STATEMENT = True
-BASELINE_STATEMENT = "Vaccines cause austim"
+BASELINE_STATEMENT = "Vaccines cause autism"
 BASELINE_TOPIC = "Vaccine safety and autism"
 
 # Seed for assigning baseline stances to agents
