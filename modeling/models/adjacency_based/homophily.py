@@ -461,6 +461,7 @@ def fit_homophily_stubborness(
         "Abar_blocks": {run_names[i]: abar_blocks[i] for i in range(len(run_names))},
         "X_pool": x_pool,
         "Y_pool": y_pool,
+        "fitted_pool": fitted_pool,
         "X0_pool": x0_pool,
         "mse_pool": mse_pool,
         "status": str(best_result["status"]),

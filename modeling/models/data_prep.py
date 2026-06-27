@@ -247,13 +247,21 @@ def build_run_trajectory(
     return traj
 
 
-def build_neighbors_index(data, global_agent_ids):
+def build_neighbors_index(data, global_agent_ids, reverse = False):
+    # standard : assume source -> destinations in data['graph']
+    # reverse = True : assume destination -> sources in data['graph']
+
     index = {a: i for i, a in enumerate(global_agent_ids)}
     pred = {a: [] for a in global_agent_ids}
     for s, dsts in data['graph'].items():
         for d in dsts:
-            if s in index and d in pred:
-                pred[d].append(s)
+
+            if not reverse:
+                if s in index and d in pred:
+                    pred[d].append(s)
+            else:
+                if d in index and s in pred:
+                    pred[s].append(d)
 
     out = {}
     for a in global_agent_ids:

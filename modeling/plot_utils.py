@@ -258,7 +258,7 @@ def plot_observed_trajectories(
     fig, ax = plt.subplots(figsize=(6, 3.5))
     
     for i in range(n_agents):
-        color = palette[i][:3]
+        color = palette[i%40][:3]
         ax.plot(t, observed[: T + 1, i], color=color, linewidth=1.2, alpha=0.7)
     
     ax.set_xlabel('Time (steps)', fontsize=9, fontweight='normal')
