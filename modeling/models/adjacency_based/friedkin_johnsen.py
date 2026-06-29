@@ -44,7 +44,7 @@ def _prepare_pooled_blocks(run_traj_map, run_neighbors):
     return run_names, x_blocks, y_blocks, x0_blocks, x_pool, y_pool, x0_pool, abar_blocks, xa_blocks, n
 
 
-def fit_base_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, eps=1e-9):
+def fit_base_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, eps=1e-9, opt_eps = 1e-09):
     (
         run_names,
         x_blocks,
@@ -75,7 +75,7 @@ def fit_base_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, eps=1
     ]
 
     problem = cp.Problem(objective, constraints)
-    problem.solve(solver=cp.OSQP, eps_abs=1e-9, eps_rel=1e-9, verbose=False)
+    problem.solve(solver=cp.OSQP, eps_abs=opt_eps, eps_rel=opt_eps, verbose=False)
 
     if lambda1_var.value is None or u_var.value is None or v_var.value is None:
         raise RuntimeError("Adjacency-based base FJ joint optimization failed to produce a solution.")
@@ -267,7 +267,7 @@ def fit_friedkin_johnsen_adjacency(run_traj_map, run_neighbors, lambda1, lambda2
     }
 
 
-def fit_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, eps=1e-9):
+def fit_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, eps=1e-9, opt_eps=1e-09):
     (
         run_names,
         x_blocks,
@@ -301,7 +301,7 @@ def fit_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, eps=1e-9):
     ]
 
     problem = cp.Problem(objective, constraints)
-    problem.solve(solver=cp.OSQP, eps_abs=1e-9, eps_rel=1e-9, verbose=False)
+    problem.solve(solver=cp.OSQP, eps_abs=opt_eps, eps_rel=opt_eps, verbose=False)
 
     if (
         lambda1_var.value is None
@@ -380,7 +380,7 @@ def friedkin_johnsen_adjacency_rollout(w, bias, x0, horizon, lambda1, lambda2):
     return predictions
 
 
-def select_friedkin_johnsen_adjacency_lambdas(run_traj_map, run_neighbors, lambda_grid=None):
+def select_friedkin_johnsen_adjacency_lambdas(run_traj_map, run_neighbors, lambda_grid=None, opt_eps=1e-09):
     if lambda_grid is not None and len(lambda_grid) > 0:
         # Sweep over lambda1 and lambda2 grid
         best_result = None
@@ -405,7 +405,7 @@ def select_friedkin_johnsen_adjacency_lambdas(run_traj_map, run_neighbors, lambd
         
         if best_result is None:
             # Fallback to joint optimization if sweep yields no valid results
-            adj_result = fit_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors)
+            adj_result = fit_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, opt_eps=opt_eps)
             best_result = {
                 "lambda1": float(adj_result["lambda1"]),
                 "lambda2": float(adj_result["lambda2"]),
@@ -418,7 +418,7 @@ def select_friedkin_johnsen_adjacency_lambdas(run_traj_map, run_neighbors, lambd
         return best_result, results_list
     else:
         # Use joint optimization when no lambda_grid provided
-        adj_result = fit_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors)
+        adj_result = fit_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, opt_eps=opt_eps)
         best_result = {
             "lambda1": float(adj_result["lambda1"]),
             "lambda2": float(adj_result["lambda2"]),
@@ -429,7 +429,7 @@ def select_friedkin_johnsen_adjacency_lambdas(run_traj_map, run_neighbors, lambd
         }
         return best_result, [best_result]
 
-def select_base_friedkin_johnsen_adjacency_lambda(run_traj_map, run_neighbors, lambda_grid=None):
+def select_base_friedkin_johnsen_adjacency_lambda(run_traj_map, run_neighbors, lambda_grid=None, opt_eps=1e-09):
     if lambda_grid is not None and len(lambda_grid) > 0:
         # Sweep over lambda1 grid
         best_result = None
@@ -451,7 +451,7 @@ def select_base_friedkin_johnsen_adjacency_lambda(run_traj_map, run_neighbors, l
         
         if best_result is None:
             # Fallback to joint optimization if sweep yields no valid results
-            adj_result = fit_base_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors)
+            adj_result = fit_base_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, opt_eps=opt_eps)
             best_result = {
                 "lambda1": float(adj_result["lambda1"]),
                 "mse_pool": float(adj_result["mse_pool"]),
@@ -462,7 +462,7 @@ def select_base_friedkin_johnsen_adjacency_lambda(run_traj_map, run_neighbors, l
         return best_result, results_list
     else:
         # Use joint optimization when no lambda_grid provided
-        adj_result = fit_base_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors)
+        adj_result = fit_base_friedkin_johnsen_adjacency_joint(run_traj_map, run_neighbors, opt_eps=opt_eps)
         best_result = {
             "lambda1": float(adj_result["lambda1"]),
             "mse_pool": float(adj_result["mse_pool"]),

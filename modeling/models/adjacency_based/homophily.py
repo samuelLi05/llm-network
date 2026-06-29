@@ -23,6 +23,7 @@ def fit_homophily(
     run_traj_map: Dict[str, Array],
     run_neighbors: Dict[str, Dict[int, List[int]]],
     gamma0: float = 1.0,
+    opt_eps: float = 1e-09,
 ) -> Dict[str, object]:
     # Build per-run datasets so each run can have its own adjacency.
     run_names = sorted(run_traj_map.keys())
@@ -62,7 +63,7 @@ def fit_homophily(
         problem = cp.Problem(objective, constraints)
 
         # Use tighter OSQP tolerances to ensure constraint satisfaction
-        problem.solve(solver=cp.OSQP, eps_abs=1e-9, eps_rel=1e-9, verbose=False)
+        problem.solve(solver=cp.OSQP, eps_abs=opt_eps, eps_rel=opt_eps, verbose=False)
 
         if lambda_self_var.value is None:
             return None
@@ -144,6 +145,7 @@ def fit_homophily_friedkin_johnsen(
     run_traj_map: Dict[str, Array],
     run_neighbors: Dict[str, Dict[int, List[int]]],
     gamma0: float = 1.0,
+    opt_eps: float = 1e-09,
 ) -> Dict[str, object]:
     run_names = sorted(run_traj_map.keys())
     if not run_names:
@@ -187,7 +189,7 @@ def fit_homophily_friedkin_johnsen(
         problem = cp.Problem(objective, constraints)
 
         # Use tighter OSQP tolerances to ensure constraint satisfaction
-        problem.solve(solver=cp.OSQP, eps_abs=1e-9, eps_rel=1e-9, verbose=False)
+        problem.solve(solver=cp.OSQP, eps_abs=opt_eps, eps_rel=opt_eps, verbose=False)
 
         if lambda_self_var.value is None or lambda1_var.value is None:
             return None
@@ -295,6 +297,7 @@ def fit_homophily_stubborness(
     run_traj_map: Dict[str, Array],
     run_neighbors: Dict[str, Dict[int, List[int]]],
     gamma0: float = 1.0,
+    opt_eps: float = 1e-09,
 ) -> Dict[str, object]:
     run_names = sorted(run_traj_map.keys())
     if not run_names:
@@ -348,7 +351,7 @@ def fit_homophily_stubborness(
         problem = cp.Problem(objective, constraints)
 
         # Use tighter OSQP tolerances to ensure constraint satisfaction
-        problem.solve(solver=cp.OSQP, eps_abs=1e-9, eps_rel=1e-9, verbose=False)
+        problem.solve(solver=cp.OSQP, eps_abs=opt_eps, eps_rel=opt_eps, verbose=False)
 
         if lambda_self_var.value is None or lambda1_var.value is None or lambda2_var.value is None or b_tilde_var.value is None:
             return None
