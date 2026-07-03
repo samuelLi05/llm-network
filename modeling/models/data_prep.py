@@ -4,6 +4,8 @@ import numpy as np
 from collections import defaultdict
 from typing import Callable, Dict, List, Tuple
 
+from scipy.optimize import minimize_scalar
+
 Array = np.ndarray
 
 FIXED_MEAN_MSGS_PER_SLICE = 15.0
@@ -502,3 +504,63 @@ def _refine_gamma_search(objective: Callable[[float], float], gamma0: float) -> 
     }
 
     return best_gamma, coarse_grid, refined_grid, gamma_objective_map
+
+def _grid_search_with_refinement(objective,
+                                 bounds = (0.0, 2.0),
+                                 coarse_points = 100,
+                                 fine_points = 100,
+                                 fine_search_region_width = 0.1,
+                                 bisection_init_region_width = 0.01,
+                                 bisection_eps = 1e-6,
+                                 custom_search_vals = None
+                                 ):
+    
+
+    coarse_grid = np.linspace(bounds[0], bounds[1], coarse_points)
+
+    if custom_search_vals is not None:
+        if not isinstance(custom_search_vals, (list, np.ndarray)):
+            raise TypeError("custom_search_vals must be a list or numpy array")
+        # add the search values to the coarse grid
+        coarse_grid = np.append(coarse_grid, np.asarray(custom_search_vals, dtype=float))
+
+    # search over coarse grid
+    coarse_losses = np.asarray([float(objective(float(theta))) for theta in coarse_grid], dtype=float)
+    coarse_best_idx = int(np.argmin(coarse_losses))
+    coarse_best_theta = float(coarse_grid[coarse_best_idx])
+
+    # refine search around best coarse theta
+    fine_lo = max(bounds[0], coarse_best_theta - fine_search_region_width)
+    fine_hi = min(bounds[1], coarse_best_theta + fine_search_region_width)
+    refined_grid = np.linspace(fine_lo, fine_hi, fine_points)
+    refined_losses = np.asarray([float(objective(float(theta))) for theta in refined_grid], dtype=float)
+    refined_best_idx = int(np.argmin(refined_losses))   
+    refined_best_theta = float(refined_grid[refined_best_idx])
+
+    # combine coarse and refined results
+    candidate_thetas = list(np.asarray(coarse_grid, dtype=float)) + list(np.asarray(refined_grid, dtype=float))
+    candidate_losses = list(np.asarray(coarse_losses, dtype=float)) + list(np.asarray(refined_losses, dtype=float))
+
+    if coarse_losses[coarse_best_idx] < refined_losses[refined_best_idx]:
+        best_theta = coarse_best_theta
+        best_loss = coarse_losses[coarse_best_idx]
+    else:
+        best_theta = refined_best_theta
+        best_loss = refined_losses[refined_best_idx]
+
+    # (if possible), do a quick bisection search around the best_theta,
+    #   otherwise, just take the best from the candidate_thetas and candidate_losses
+    lo = max(bounds[0], best_theta - bisection_init_region_width)
+    hi = min(bounds[1], best_theta + bisection_init_region_width)
+
+    if (objective(lo) > best_loss) and (objective(hi) > best_loss):
+        res = minimize_scalar(objective, bracket = (lo, best_theta, hi), method='golden', tol=bisection_eps)        
+
+        res_obj = objective(res.x)
+
+        if res_obj < min(candidate_losses):
+            best_theta = float(res.x)
+            candidate_thetas.append(best_theta)
+            candidate_losses.append(float(res_obj))
+
+    return best_theta, dict(zip(candidate_thetas, candidate_losses))

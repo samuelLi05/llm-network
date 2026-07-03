@@ -89,7 +89,8 @@ def _prepare_pooled_blocks_rep(run_traj_map, run_neighbors):
     }
 
 
-def fit_repulsion_joint_add(run_traj_map, run_neighbors, eps=1e-09, opt_eps=1e-09):
+def fit_repulsion_joint_add(run_traj_map, run_neighbors, eps=1e-09, opt_eps=1e-09,
+                            custom_search_vals = None):
 
     # Solve for the optimal model with a repulsion term
     #  where the repulsion term is tanh(\sum_{j \in N(i) : |x(j) - x(i)| > theta_rep} (x(j) - x(i)))
@@ -142,6 +143,11 @@ def fit_repulsion_joint_add(run_traj_map, run_neighbors, eps=1e-09, opt_eps=1e-0
         fitted_pool = lambda_self * x_pool + lambda_social * xa_pool + lambda_repulsion * rep_pool
         mse_pool = float(np.mean((fitted_pool - y_pool) ** 2))
 
+        # check that mse_pool is close to the opt value
+        mse_pool_sum = float(np.sum((fitted_pool - y_pool) ** 2))
+        if abs(mse_pool_sum - problem.value) > 1e-6:
+            raise ValueError(f"Computed mse_pool_sum {mse_pool_sum} is not close to the optimization value {problem.value}")
+
         solver_iters = -1
         if problem.solver_stats is not None and problem.solver_stats.num_iters is not None:
             solver_iters = int(problem.solver_stats.num_iters)
@@ -166,7 +172,8 @@ def fit_repulsion_joint_add(run_traj_map, run_neighbors, eps=1e-09, opt_eps=1e-0
     
     theta_hat, theta_objective_map = _grid_search_with_refinement(
         theta_objective, 
-        bounds = (0.0, 2.0))
+        bounds = (0.0, 2.0),
+        custom_search_vals = custom_search_vals)
 
     best_result = _solve_for_rep(theta_hat)
     if best_result is None:
@@ -188,7 +195,8 @@ def fit_repulsion_joint_add(run_traj_map, run_neighbors, eps=1e-09, opt_eps=1e-0
         "total_points": int(total_points)
     }
 
-def fit_friedkin_johnsen_bias_tanh_repulsion_joint(run_traj_map, run_neighbors, eps=1e-09, opt_eps=1e-09):
+def fit_friedkin_johnsen_bias_tanh_repulsion_joint_add(run_traj_map, run_neighbors, eps=1e-09, opt_eps=1e-09,
+                                                       custom_search_vals=None):
 
     # Solve for the optimal model with a repulsion term
     #  where the repulsion term is tanh(\sum_{j \in N(i) : |x(j) - x(i)| > theta_rep} (x(j) - x(i)))
@@ -300,7 +308,8 @@ def fit_friedkin_johnsen_bias_tanh_repulsion_joint(run_traj_map, run_neighbors, 
     
     theta_hat, theta_objective_map = _grid_search_with_refinement(
         theta_objective, 
-        bounds = (0.0, 2.0))
+        bounds = (0.0, 2.0),
+        custom_search_vals = custom_search_vals)
     
     best_result = _solve_for_rep(theta_hat)
     if best_result is None:
@@ -324,5 +333,3 @@ def fit_friedkin_johnsen_bias_tanh_repulsion_joint(run_traj_map, run_neighbors, 
         "theta_objective_map": theta_objective_map,
         "total_points": int(total_points)
     }
-
-    raise NotImplementedError("This function is not yet implemented. It will solve for the optimal model with a repulsion term using cvxpy.")
