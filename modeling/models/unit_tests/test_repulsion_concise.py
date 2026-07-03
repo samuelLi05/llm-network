@@ -162,7 +162,6 @@ class TestBaseRepulisionRecovery(unittest.TestCase):
 
             self.assertLess(fit['mse_pool'], 1e-04)
 
-    # def test_per_run_different_graphs()
     def test_per_run_different_graph(self):
         """Hald runs on ring, half on complete; """
         rng = np.random.default_rng(123)
@@ -194,6 +193,63 @@ class TestBaseRepulisionRecovery(unittest.TestCase):
         self.assertAlmostEqual(fit['lambda_self'], 1.0 - l_soc - l_rep, delta=1e-04)
 
         self.assertLessEqual(fit['mse_pool'], 1e-04)
+
+    def test_varied_graph_random_params(self):
+
+        """Generate 10 sets of runs with
+                - randomly sampled generation parmaeters
+                - 10 runs with different random graphs
+        """
+
+        rng = np.random.default_rng(456)
+        n, in_degree = 12, 4
+
+        # generate a random list of 10 sets of parameters
+
+        param_set = []
+        for _ in range(10):
+            l_soc = rng.uniform(0.0, 1.0)
+            l_rep = rng.uniform(0.0, 1.0 - l_soc)
+            theta_rep = rng.uniform(0.0, 2.0)
+
+            param_set.append((l_soc, l_rep, theta_rep))
+
+        # also push some edge cases
+        param_set.append((0.0, 0.5, 0.5))
+        param_set.append((0.5, 0.0, 0.5))
+        param_set.append((0.5, 0.5, 0.5))
+        param_set.append((0.3, 0.2, 0.0))
+        param_set.append((0.2, 0.3, 2.0))
+
+        for p in param_set:
+
+            l_soc, l_rep, theta_rep = p
+
+            run_traj, run_neighbors = {}, {}
+            for r in range(10):
+                nbrs = _random_sparse(n, in_degree, rng)
+                Abar = build_expected_message_matrix(nbrs, n)
+                run_traj[f'run_{r:02d}'] = _sim_tanh_repulsion_no_homophily(
+                    Abar = Abar,
+                    lambda_self = 1.0 - l_soc - l_rep,
+                    lambda_social = l_soc,
+                    lambda_repulsion= l_rep,
+                    theta_repulsion=theta_rep,
+                    n_runs = 1,
+                    horizon = 10,
+                    rng=rng
+                )[f'run_00']
+                run_neighbors[f'run_{r:02d}'] = nbrs
+            fit = fit_repulsion_joint_add(run_traj, run_neighbors)
+
+            DELTA = 2e-03
+            self.assertAlmostEqual(fit['lambda_social'], l_soc, delta=DELTA)
+            self.assertAlmostEqual(fit['lambda_repulsion'], l_rep, delta=DELTA)
+            self.assertAlmostEqual(fit['lambda_self'], 1.0 - l_soc - l_rep, delta=DELTA)
+
+            self.assertLessEqual(fit['mse_pool'], 1e-04)
+
+                    
 
 
 if __name__ == '__main__':

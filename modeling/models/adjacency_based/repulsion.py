@@ -204,6 +204,125 @@ def fit_friedkin_johnsen_bias_tanh_repulsion_joint(run_traj_map, run_neighbors, 
     def _solve_for_rep(theta_rep_fixed: float):
         theta_rep_fixed = float(theta_rep_fixed)
 
-        pass
+        rep_blocks = [
+            np.asarray([_get_repulsion_term_tanh(x_blocks[i][t], nbrs_list[i], theta_rep_fixed) for t in range(x_blocks[i].shape[0])],dtype=float)
+            for i in range(len(x_blocks))
+        ]
+        rep_pool = np.vstack(rep_blocks)
+
+        lambda_self_var = cp.Variable(nonneg=True)
+        lambda_social_var = cp.Variable(nonneg=True)
+        lambda_init_var = cp.Variable(nonneg=True)
+        lambda_bias_var = cp.Variable(nonneg=True)
+        lambda_repulsion_var = cp.Variable(nonneg=True)
+
+        bias_tilde_var = cp.Variable()  # variable representing lambda_bias * bias, in reformulation
+        
+        pred_pool = (lambda_self_var * x_pool + 
+                     lambda_social_var * xa_pool + 
+                     lambda_init_var * x0_pool + 
+                     bias_tilde_var + 
+                     lambda_repulsion_var * rep_pool)
+        
+        objective = cp.Minimize(cp.sum_squares(pred_pool - y_pool))
+        constraints = [lambda_self_var + lambda_social_var + lambda_init_var + lambda_bias_var + lambda_repulsion_var == 1,
+                       bias_tilde_var <= lambda_bias_var,
+                       bias_tilde_var >= -lambda_bias_var]
+        
+        problem = cp.Problem(objective, constraints)
+        problem.solve(solver=cp.OSQP, eps_abs=opt_eps, eps_rel=opt_eps, verbose=False)
+
+        if (
+            lambda_self_var.value is None or
+            lambda_social_var.value is None or
+            lambda_init_var.value is None or
+            lambda_bias_var.value is None or
+            lambda_repulsion_var.value is None or
+            bias_tilde_var.value is None
+        ):
+            raise RuntimeError("Optimization failed to find a solution.")
+        
+        # clamp all the lambdas to [0, 1] and renormalize
+        lambda_self = max(0, min(1, lambda_self_var.value))
+        lambda_social = max(0, min(1, lambda_social_var.value))
+        lambda_init = max(0, min(1, lambda_init_var.value))
+        lambda_bias = max(0, min(1, lambda_bias_var.value))
+        lambda_repulsion = max(0, min(1, lambda_repulsion_var.value))
+
+        total = lambda_self + lambda_social + lambda_init + lambda_bias + lambda_repulsion
+        if total > 0:
+            lambda_self /= total
+            lambda_social /= total
+            lambda_init /= total
+            lambda_bias /= total
+            lambda_repulsion /= total
+        else:
+            raise ValueError("All lambda values are zero after clamping, cannot normalize.")
+
+        # also clip bias_tilde to be in -lambda_bias, lambda_bias
+        bias_tilde = max(-lambda_bias, min(lambda_bias, bias_tilde_var.value))
+
+        bias = bias_tilde / lambda_bias if lambda_bias > 0 else 0.0 # if lambda_bias is 0, bias has no effect, so we can set it to 0
+
+        fitted_pool = lambda_self * x_pool + lambda_social * xa_pool + lambda_init * x0_pool + bias * lambda_bias + lambda_repulsion * rep_pool
+
+        mse_pool = float(np.mean((fitted_pool - y_pool) ** 2))
+
+        mse_pool_sum = float(np.sum((fitted_pool - y_pool) ** 2))
+        # check that mse_pool_sum is close to the opt value
+        if abs(mse_pool_sum - problem.value) > 1e-6:
+            raise ValueError(f"Computed mse_pool_sum {mse_pool_sum} is not close to the optimization value {problem.value}")
+
+        solver_iters = -1
+        if problem.solver_stats is not None and problem.solver_stats.num_iters is not None:
+            solver_iters = int(problem.solver_stats.num_iters)
+
+        candidate = {
+            "theta_rep": theta_rep_fixed,
+            "lambda_self": lambda_self,
+            "lambda_social": lambda_social,
+            "lambda_init": lambda_init,
+            "lambda_bias": lambda_bias,
+            "lambda_repulsion": lambda_repulsion,
+            "bias": bias,
+            "mse_pool": mse_pool,
+            "status":  str(problem.status),
+            "success": bool(problem.status in (cp.OPTIMAL)),
+            "nit": solver_iters,
+            "objective": float(problem.value) if problem.value is not None else mse_pool
+        }
+
+        return candidate
+    
+    def theta_objective(theta_fixed: float) -> float:
+        candidate = _solve_for_rep(theta_fixed)
+        return candidate["mse_pool"]
+    
+    theta_hat, theta_objective_map = _grid_search_with_refinement(
+        theta_objective, 
+        bounds = (0.0, 2.0))
+    
+    best_result = _solve_for_rep(theta_hat)
+    if best_result is None:
+        raise ValueError("Failed to find a valid solution for the best theta.")
+
+    total_points = np.shape(y_pool)[0] * np.shape(y_pool)[1]
+
+    return {
+        "theta_rep": float(best_result["theta_rep"]),
+        "lambda_self": float(best_result["lambda_self"]),
+        "lambda_social": float(best_result["lambda_social"]),
+        "lambda_init": float(best_result["lambda_init"]),
+        "lambda_bias": float(best_result["lambda_bias"]),
+        "lambda_repulsion": float(best_result["lambda_repulsion"]),
+        "bias": float(best_result["bias"]),
+        "mse_pool": float(best_result["mse_pool"]),
+        "status": str(best_result["status"]),
+        "success": bool(best_result["success"]),
+        "nit": int(best_result["nit"]),
+        "objective": float(best_result["objective"]),
+        "theta_objective_map": theta_objective_map,
+        "total_points": int(total_points)
+    }
 
     raise NotImplementedError("This function is not yet implemented. It will solve for the optimal model with a repulsion term using cvxpy.")
