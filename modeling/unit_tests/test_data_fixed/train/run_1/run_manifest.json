@@ -1,0 +1,11 @@
+{
+  "run_timestamp": "20260701-141041",
+  "topic": "The sky is blue.",
+  "message_count": 6,
+  "agent_count": 3,
+  "agent_ids": [
+    "agent_1",
+    "agent_2",
+    "agent_3"
+  ]
+}

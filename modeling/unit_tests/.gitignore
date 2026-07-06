@@ -1,0 +1,3 @@
+test_data_fixed_out/
+# keep test_data_fixed as this comprises reference data for the testing code.
+temp_test_logs/

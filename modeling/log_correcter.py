@@ -100,7 +100,7 @@ def clean_log_times_and_init(experiment_dir, out_dir, poisson_lambda, rng = None
 
 
     # for debugging, track lists of logged and recomputed initial opinions. 
-    #  should be very close to equal
+    #  These should be very close to equal.
     ss_sim_logged_list = []
     ss_recomputed_list = []
 
@@ -210,10 +210,6 @@ def clean_log_times_and_init(experiment_dir, out_dir, poisson_lambda, rng = None
 
 
 if __name__ == "__main__":
-
-    # TEMP
-
-
 
     topic = "Vaccines cause austim"
 

@@ -18,7 +18,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # Import notebook-used helpers
-from modeling.models.data_prep import load_run_data, build_run_trajectory, build_neighbors_index, _numeric_agent_key, build_row_normalized_adjacency  # type: ignore
+from modeling.models.data_prep import  build_neighbors_index, _numeric_agent_key, build_row_normalized_adjacency  # type: ignore
+from modeling.models.data_prep_network_size import load_cleaned_run_data, build_run_trajectory_from_clean
 from modeling.models.analysis_utils import (  # type: ignore
     plot_wasserstein_distance_per_timestep,  # not used, but keep for parity
 )
@@ -65,6 +66,10 @@ PARAMS = {
     'constrain_messages': 150,
     'rollout_horizon_cap': 20,
 }
+
+# To keep time slices consistent across runs, we  use computer_required_time_slice
+#   for a FIXED number of agents, even though we're evaluating different network sizes.
+REFERENCE_AGENT_SIZE = 30   
 
 
 def stack_curves(curves):
@@ -232,7 +237,7 @@ if __name__ == '__main__':
     LLM = "llama3.1"
     TOPIC = "vaccines"
 
-    RUNS_DIR = ROOT / 'modeling' / 'runs_varied_size' / LLM / TOPIC
+    RUNS_DIR = ROOT / 'modeling' / 'runs_varied_size_corrected' / LLM / TOPIC
     ALL_SIZES = sorted([d.name for d in RUNS_DIR.iterdir() if d.is_dir()])
     print(f'Discovered network sizes: {ALL_SIZES}.')
     combo_dir = ROOT / 'network_size_model_rankings' / LLM / TOPIC
@@ -249,10 +254,10 @@ if __name__ == '__main__':
         print(f'\n[{LLM}/{TOPIC}/{network_size}] {len(run_dirs)} runs')
     
         try:
-            run_data = {r.name: load_run_data(r) for r in run_dirs}
+            run_data = {r.name: load_cleaned_run_data(r) for r in run_dirs}
             global_agents = sorted({a for d in run_data.values() for a in d['agent_ids']}, key=_numeric_agent_key)
             n_agents = len(global_agents)
-            traj_mask = {rn: build_run_trajectory(d, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=True, constrain_messages=PARAMS['constrain_messages']) for rn, d in run_data.items()}
+            traj_mask = {rn: build_run_trajectory_from_clean(d, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=True, constrain_messages=PARAMS['constrain_messages'], reference_agent_number = REFERENCE_AGENT_SIZE) for rn, d in run_data.items()}
             run_traj = {rn: tm[0] for rn, tm in traj_mask.items()}
             run_neighbors = {rn: build_neighbors_index(d, global_agents, reverse=REVERSE_GRAPH) for rn, d in run_data.items()}
         except Exception as e:
@@ -262,8 +267,8 @@ if __name__ == '__main__':
         # Build test rollouts using fitted params (best-effort)
         try:
             test_run_dirs = sorted([p for p in test_path.iterdir() if p.is_dir()])
-            test_run_data = {r.name: load_run_data(r) for r in test_run_dirs}
-            test_traj = {run_name: build_run_trajectory(data, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=False, constrain_messages=PARAMS['constrain_messages']) for run_name, data in test_run_data.items()}
+            test_run_data = {r.name: load_cleaned_run_data(r) for r in test_run_dirs}
+            test_traj = {run_name: build_run_trajectory_from_clean(data, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=False, constrain_messages=PARAMS['constrain_messages'], reference_agent_number = REFERENCE_AGENT_SIZE) for run_name, data in test_run_data.items()}
             test_neighbors = {run_name: build_neighbors_index(data, global_agents, reverse=REVERSE_GRAPH) for run_name, data in test_run_data.items()}
 
             # Fit all adjacency-based models on pooled training data (to use for test rollouts)
@@ -273,14 +278,15 @@ if __name__ == '__main__':
             TOTAL_POINTS_DG = int(DEGROOT_ADJ.get('total_points', 0))
             print("Finished fitting dg")
 
-            BEST_BASE_FJ_ADJ, _ = select_base_friedkin_johnsen_adjacency_lambda(run_traj, run_neighbors)
+            opt_eps = 1e-09
+            BEST_BASE_FJ_ADJ, _ = select_base_friedkin_johnsen_adjacency_lambda(run_traj, run_neighbors, opt_eps=opt_eps)
             BASE_FJ_ADJ_L1 = BEST_BASE_FJ_ADJ['lambda1']
             BASE_FJ_ADJ_GAMMA = BEST_BASE_FJ_ADJ['gamma']
             BASE_FJ_ADJ_MSE = BEST_BASE_FJ_ADJ['mse_pool']
             TOTAL_POINTS_FJ = int(BEST_BASE_FJ_ADJ.get('total_points', 0))
             print("Finished fitting fj no bias")
 
-            BEST_FJ_ADJ, _ = select_friedkin_johnsen_adjacency_lambdas(run_traj, run_neighbors)
+            BEST_FJ_ADJ, _ = select_friedkin_johnsen_adjacency_lambdas(run_traj, run_neighbors, opt_eps=opt_eps)
             FJ_ADJ_L1 = BEST_FJ_ADJ['lambda1']
             FJ_ADJ_L2 = BEST_FJ_ADJ['lambda2']
             FJ_ADJ_GAMMA = BEST_FJ_ADJ['gamma']
@@ -289,20 +295,20 @@ if __name__ == '__main__':
             TOTAL_POINTS_FJ_BIAS = int(BEST_FJ_ADJ.get('total_points', 0))
             print("Finished fitting fj with bias")
 
-            HOMOPHILY_FIT = fit_homophily(run_traj, run_neighbors, gamma0=1.0)
+            HOMOPHILY_FIT = fit_homophily(run_traj, run_neighbors, gamma0=1.0, opt_eps=opt_eps)
             HOMOPHILY_GAMMA = HOMOPHILY_FIT.get('gamma', np.nan)
             HOMOPHILY_LAMBDA = HOMOPHILY_FIT.get('lambda', np.nan)
             TOTAL_POINTS_HOMOPHILY = int(HOMOPHILY_FIT.get('total_points', 0))
             print("Finished fitting homophily")
 
-            BEST_HOMO_FJ = fit_homophily_friedkin_johnsen(run_traj, run_neighbors, gamma0=HOMOPHILY_GAMMA)
+            BEST_HOMO_FJ = fit_homophily_friedkin_johnsen(run_traj, run_neighbors, gamma0=HOMOPHILY_GAMMA, opt_eps=opt_eps)
             HOMO_FJ_GAMMA = BEST_HOMO_FJ.get('gamma', np.nan)
             HOMO_FJ_L1 = BEST_HOMO_FJ.get('lambda1', np.nan)
             HOMO_FJ_LSELF = BEST_HOMO_FJ.get('lambda_self', np.nan)
             TOTAL_POINTS_HOMOPHILY_FJ = int(BEST_HOMO_FJ.get('total_points', 0))
             print("Finished fitting homophily Friedkin Johnsen")
 
-            BEST_HOMO_STUB = fit_homophily_stubborness(run_traj, run_neighbors, gamma0=HOMOPHILY_GAMMA)
+            BEST_HOMO_STUB = fit_homophily_stubborness(run_traj, run_neighbors, gamma0=HOMOPHILY_GAMMA, opt_eps=opt_eps)
             HOMO_STUB_GAMMA = BEST_HOMO_STUB.get('gamma', np.nan)
             HOMO_STUB_LSELF = BEST_HOMO_STUB.get('lambda_self', np.nan)
             HOMO_STUB_L1 = BEST_HOMO_STUB.get('lambda1', np.nan)
