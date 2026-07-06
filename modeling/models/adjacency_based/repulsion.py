@@ -18,15 +18,9 @@ def _get_repulsion_term_tanh(x, neighbors, theta_rep):
     for i in range(n_agents):
         for j in neighbors[i]:
             if abs(x[j] - x[i]) > theta_rep:
-                pre_tanh_repulsion_term[i] += x[j] - x[i]
+                pre_tanh_repulsion_term[i] += -1*(x[j] - x[i])
     
     return np.tanh(pre_tanh_repulsion_term)
-
-
-
-
-    
-
 
 
 def _prepare_pooled_blocks_rep(run_traj_map, run_neighbors):

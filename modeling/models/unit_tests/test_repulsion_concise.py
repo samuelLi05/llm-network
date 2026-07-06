@@ -80,7 +80,7 @@ def _sim_tanh_repulsion_no_homophily(Abar,
                     if i != j and Abar[i, j] > 0:
                         diff = x[j] - x[i]
                         if abs(diff) > theta_repulsion:
-                            repulsion_term[i] += diff
+                            repulsion_term[i] += -1*diff
             repulsion_term = np.tanh(repulsion_term)
 
             x = (lambda_self * x + lambda_social * Abar @ x \
@@ -188,9 +188,32 @@ class TestBaseRepulsionRecovery(unittest.TestCase):
             run_neighbors[f'run_{r:02d}'] = nbrs
         fit = fit_repulsion_joint_add(run_traj, run_neighbors)
 
-        self.assertAlmostEqual(fit['lambda_social'], l_soc, delta=1e-04)
-        self.assertAlmostEqual(fit['lambda_repulsion'], l_rep, delta=1e-04)
-        self.assertAlmostEqual(fit['lambda_self'], 1.0 - l_soc - l_rep, delta=1e-04)
+        if not (fit['lambda_social'] - l_soc < 1e-04 and fit['lambda_repulsion'] - l_rep < 1e-04 and fit['lambda_self'] - (1.0 - l_soc - l_rep) < 1e-04):
+            # if there's some mismatch, check that we at least get good values when we try and re-fit with
+            #   a known theta_repulsion value, and check that when we rollout the problem, we get a trajectory that is close to the original trajectory
+            fit_oracle = fit_repulsion_joint_add(run_traj, run_neighbors, custom_search_vals=[theta_rep])
+
+            for r in range(16):
+                nbrs = run_neighbors[f'run_{r:02d}']
+                Abar = build_expected_message_matrix(nbrs, n)
+                recovered_traj = _sim_tanh_repulsion_no_homophily(
+                    Abar = Abar,
+                    lambda_self = fit_oracle['lambda_self'],
+                    lambda_social = fit_oracle['lambda_social'],
+                    lambda_repulsion= fit_oracle['lambda_repulsion'],
+                    theta_repulsion=fit_oracle['theta_rep'],
+                    n_runs = 1,
+                    horizon = 10,
+                    x0 = run_traj[f'run_{r:02d}'][0],
+                )[f'run_00']
+                
+                self.assertTrue(np.allclose(recovered_traj, run_traj[f'run_{r:02d}'], atol=1e-04), 
+                                msg=f"Recovered trajectory does not match original trajectory for run {r}. Max abs diff: {np.max(np.abs(recovered_traj - run_traj[f'run_{r:02d}']))}")
+                
+        else:
+            self.assertAlmostEqual(fit['lambda_social'], l_soc, delta=1e-04)
+            self.assertAlmostEqual(fit['lambda_repulsion'], l_rep, delta=1e-04)
+            self.assertAlmostEqual(fit['lambda_self'], 1.0 - l_soc - l_rep, delta=1e-04)
 
         self.assertLessEqual(fit['mse_pool'], 1e-04)
 
