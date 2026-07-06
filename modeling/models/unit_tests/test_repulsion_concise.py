@@ -42,17 +42,6 @@ def _random_sparse(n, in_degree, rng):
         nbrs[i] = rng.choice(pool, size=in_degree, replace=False).tolist()
     return nbrs
 
-def _row_normalize(w):
-    w = np.asarray(w, dtype=float)
-    row_sums = w.sum(axis=1, keepdims=True)
-    out = np.zeros_like(w)
-    valid = row_sums[:, 0] > 0.0
-    out[valid] = w[valid] / row_sums[valid]
-    # raise error if any row sums are zero, since that would indicate an invalid W matrix
-    if not np.all(valid):
-        raise ValueError("Row-normalization failed: some rows sum to zero, indicating invalid W matrix.")
-    return out
-
 def _sim_tanh_repulsion_no_homophily(Abar,
                                      lambda_self = None,
                                      lambda_social = None,

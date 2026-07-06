@@ -1,3 +1,6 @@
+""" Fitting functions for models where repulsion is treated as
+an additive effect """
+
 import cvxpy as cp
 import numpy as np
 
@@ -20,30 +23,7 @@ def _get_repulsion_term_tanh(x, neighbors, theta_rep):
     return np.tanh(pre_tanh_repulsion_term)
 
 
-def _get_generic_social_kernel_term(x, neighbors, F):
 
-    # : x : np.array of shape (n_agents, ) representing the opinions of agents
-    # : neighbors : list of lists, where neighbors[i] is a list of indices of neighbors of agent i, who influence agent i
-    # : F : a kernel function that takes a non-negative float and returns a float. 
-    #           which will be used to weight neighbors' opinions
-
-    n_agents = len(x)
-
-    for i in range(n_agents):
-
-        nbh = list(neighbors[i])
-
-        weights = [F(abs(x[j] - x[i])) for j in nbh]
-        nbh_op = [x[j] for j in nbh]
-
-        # normalize the weights so the absolute values sum to 1, if there are any weights
-        if len(weights) == 0:
-            raise ValueError(f"Agent {i} has no neighbors, cannot compute social kernel term.")
-        
-        weights = np.array(weights)
-        weights /= np.sum(np.abs(weights))
-
-        x[i] = np.sum([weights[j] * nbh_op[j] for j in range(len(nbh))])
 
     
 
@@ -70,8 +50,6 @@ def _prepare_pooled_blocks_rep(run_traj_map, run_neighbors):
     abar_blocks = [build_expected_message_matrix(run_neighbors.get(rn, {}), n) for rn in run_names]
     nbrs_list = [run_neighbors.get(rn, {}) for rn in run_names]
     xa_blocks = [x_blocks[i] @ abar_blocks[i].T for i in range(len(x_blocks))]
-
-
     
     return {
         "run_names": run_names,
