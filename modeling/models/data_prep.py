@@ -90,14 +90,27 @@ def compute_required_time_slice_ms(n_agents, target_agent_fraction):
     return 8000
 
 
-def _bucket_events_to_slices(message_events, slice_ms):
+def _bucket_events_to_slices(message_events, slice_ms, noisy_slicing = False):
     ordered_events = sorted(message_events, key=lambda x: x[0])
     start_ms = ordered_events[0][0]
     slice_stance = defaultdict(dict)
 
+    slice_message_count = {}
     for t_ms, aid, ss in ordered_events:
         slice_idx = int((t_ms - start_ms) // slice_ms)
         slice_stance[slice_idx][aid] = float(ss)
+
+        # logging for noisy slicing
+        slice_message_count[slice_idx] = slice_message_count.get(slice_idx,0) + 1
+
+    for slice_idx in range(max(slice_stance.keys()) + 1):
+        if not(slice_idx in slice_message_count):
+            slice_message_count[slice_idx] = 0 
+
+    if noisy_slicing:
+        # print information on the per-slice messages we observe
+        print("Slice message counts: ", slice_message_count)
+
 
     last_slice = max(slice_stance.keys()) if slice_stance else 0
     return dict(slice_stance), int(last_slice)
@@ -512,11 +525,24 @@ def _grid_search_with_refinement(objective,
                                  fine_search_region_width = 0.1,
                                  bisection_init_region_width = 0.01,
                                  bisection_eps = 1e-6,
-                                 custom_search_vals = None
+                                 custom_search_vals = None,
+                                 geom_search_bnds = None
                                  ):
     
+    max_valid_value = bounds[1]
+    min_valid_value = bounds[0]
 
     coarse_grid = np.linspace(bounds[0], bounds[1], coarse_points)
+
+    if not (geom_search_bnds is None):
+        if isinstance(geom_search_bnds, tuple) and len(geom_search_bnds) == 2:
+            coarse_grid_geom = np.geomspace(geom_search_bnds[0], geom_search_bnds[1])
+            coarse_grid = np.unique(np.concatenate((coarse_grid, coarse_grid_geom)))
+
+            min_valid_value = min(min_valid_value, geom_search_bnds[0])
+            max_valid_value = max(max_valid_value, geom_search_bnds[1])
+        else:
+            raise ValueError("Geometric search bounds should be a 2-tuple")
 
     if custom_search_vals is not None:
         if not isinstance(custom_search_vals, (list, np.ndarray)):
@@ -550,11 +576,11 @@ def _grid_search_with_refinement(objective,
 
     # (if possible), do a quick bisection search around the best_theta,
     #   otherwise, just take the best from the candidate_thetas and candidate_losses
-    lo = max(bounds[0], best_theta - bisection_init_region_width)
-    hi = min(bounds[1], best_theta + bisection_init_region_width)
+    lo = max(min_valid_value, best_theta - bisection_init_region_width)
+    hi = min(max_valid_value, best_theta + bisection_init_region_width)
 
-    if (objective(lo) > best_loss) and (objective(hi) > best_loss):
-        res = minimize_scalar(objective, bracket = (lo, best_theta, hi), method='golden', tol=bisection_eps)        
+    if (objective(lo) - best_loss > 0.0) and (objective(hi) - best_loss > 0.0):
+        res = minimize_scalar(objective, bracket = (lo, best_theta, hi), method='golden', tol=bisection_eps)
 
         res_obj = objective(res.x)
 
