@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
+import argparse
 
 ROOT = Path(__file__).resolve().parents[1]
 # ensure project imports work
@@ -53,6 +54,18 @@ PARAMS = {
 
 
 if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(description='Generate model rankings and gamma-objective plots for all LLM/topic combos.')
+    parser.add_argument('--reverse-graph', action='store_true', help='If set, interpret the graph edges in reverse direction when building neighbor indices.')
+    args = parser.parse_args()
+
+    # Raise error is --reverse-graph is false
+    if not args.reverse_graph:
+        raise ValueError("This script should really be run with --reverse-graph set. Please run with --reverse-graph.")
+
+    REVERSE_GRAPH = args.reverse_graph
+    print("Reverse graph mode:", REVERSE_GRAPH)
+    
     RUNS_DIR = ROOT / 'modeling' / 'runs_fg_vs_adj'
     train_path = RUNS_DIR / 'fixed_graph' / 'train'
     test_path = RUNS_DIR / 'fixed_graph' / 'test'
@@ -71,11 +84,11 @@ if __name__ == '__main__':
     train_run_dirs = sorted([p for p in train_path.iterdir() if p.is_dir()])
     try:
         run_data_train = {r.name: load_run_data(r) for r in train_run_dirs}
-        global_agent_ids = sorted({a for d in run_data_train.values() for a in d['agent_ids']}, key=_numeric_agent_key)
-        n_agents = len(global_agent_ids)
-        traj_mask_train = {rn: build_run_trajectory(d, global_agent_ids, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=True, constrain_messages=PARAMS['constrain_messages']) for rn, d in run_data_train.items()}
+        global_agents = sorted({a for d in run_data_train.values() for a in d['agent_ids']}, key=_numeric_agent_key)
+        n_agents = len(global_agents)
+        traj_mask_train = {rn: build_run_trajectory(d, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=True, constrain_messages=PARAMS['constrain_messages']) for rn, d in run_data_train.items()}
         run_traj_train = {rn: tm[0] for rn, tm in traj_mask_train.items()}
-        run_neighbors_train = {rn: build_neighbors_index(d, global_agent_ids) for rn, d in run_data_train.items()}
+        run_neighbors_train = {rn: build_neighbors_index(d, global_agents, reverse=REVERSE_GRAPH) for rn, d in run_data_train.items()}
 
         # validte that run neighbors are consistent ACROSS runs
         for rn, nbrs in run_neighbors_train.items():
@@ -177,8 +190,8 @@ if __name__ == '__main__':
     try:
         test_run_dirs = sorted([p for p in test_path.iterdir() if p.is_dir()])
         test_run_data = {r.name: load_run_data(r) for r in test_run_dirs}
-        test_traj = {run_name: build_run_trajectory(data, global_agent_ids, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=False, constrain_messages=PARAMS['constrain_messages']) for run_name, data in test_run_data.items()}
-        test_neighbors = {run_name: build_neighbors_index(data, global_agent_ids) for run_name, data in test_run_data.items()}
+        test_traj = {run_name: build_run_trajectory(data, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=False, constrain_messages=PARAMS['constrain_messages']) for run_name, data in test_run_data.items()}
+        test_neighbors = {run_name: build_neighbors_index(data, global_agents, reverse=REVERSE_GRAPH) for run_name, data in test_run_data.items()}
         # assert test neighbors are consistent across runs, and are the same as train neighbors
         for rn, nbrs in test_neighbors.items():
             for other_rn, other_nbrs in test_neighbors.items():
@@ -286,6 +299,21 @@ if __name__ == '__main__':
             summary_rows.append(summary_row)
 
         summary_df = pd.DataFrame(summary_rows)
+
+        # Save per-run trajectory archives: observed + all model rollouts
+        traj_dir = combo_dir / 'trajectories'
+        traj_dir.mkdir(exist_ok=True)
+        for run_name in test_traj.keys():
+            np.savez(
+                traj_dir / f'{llm_name}__{topic_name}__{run_name}.npz',
+                observed=np.asarray(test_traj[run_name], dtype=float),
+                fj_adj=np.asarray(rollout_maps_test['fj_adj'][run_name], dtype=float),
+                fj_fg=np.asarray(rollout_maps_test['fj_fg'][run_name], dtype=float),
+                fj_fg_ngc=np.asarray(rollout_maps_test['fj_fg_ngc'][run_name], dtype=float),
+                hom_fj_b_adj=np.asarray(rollout_maps_test['hom_fj_b_adj'][run_name], dtype=float),
+                hom_fj_b_fg=np.asarray(rollout_maps_test['hom_fj_b_fg'][run_name], dtype=float),
+            )
+        print(f'Saved trajectory archives to: {traj_dir}')
 
         ranking_cols = [
             'model', 'n_runs',

@@ -6,6 +6,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+import argparse
+
 ROOT = Path(__file__).resolve().parents[1]
 # ensure project imports work
 if str(ROOT) not in sys.path:
@@ -210,6 +212,19 @@ def save_gamma_objective_plot(gamma_objective_map: dict, fitted_gamma: float, mo
 
 
 if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(description='Generate model rankings and gamma-objective plots for all LLM/topic combos.')
+    parser.add_argument('--reverse-graph', action='store_true', help='If set, interpret the graph edges in reverse direction when building neighbor indices.')
+    args = parser.parse_args()
+
+    # Raise error is --reverse-graph is false
+    if not args.reverse_graph:
+        raise ValueError("This script should really be run with --reverse-graph set. Please run with --reverse-graph.")
+
+    REVERSE_GRAPH = args.reverse_graph
+    print("Reverse graph mode:", REVERSE_GRAPH)
+
+
     RUNS_DIR = ROOT / 'modeling' / 'runs'
     ALL_LLMS = sorted([d.name for d in RUNS_DIR.iterdir() if d.is_dir()])
     print(f'Discovered LLMs: {ALL_LLMS}.')
@@ -232,7 +247,7 @@ if __name__ == '__main__':
                 n_agents = len(global_agents)
                 traj_mask = {rn: build_run_trajectory(d, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=True, constrain_messages=PARAMS['constrain_messages']) for rn, d in run_data.items()}
                 run_traj = {rn: tm[0] for rn, tm in traj_mask.items()}
-                run_neighbors = {rn: build_neighbors_index(d, global_agents) for rn, d in run_data.items()}
+                run_neighbors = {rn: build_neighbors_index(d, global_agents, reverse=REVERSE_GRAPH) for rn, d in run_data.items()}
             except Exception as e:
                 print(f' Error loading run data: {str(e)[:120]}')
                 raise e
@@ -242,7 +257,7 @@ if __name__ == '__main__':
                 test_run_dirs = sorted([p for p in test_path.iterdir() if p.is_dir()])
                 test_run_data = {r.name: load_run_data(r) for r in test_run_dirs}
                 test_traj = {run_name: build_run_trajectory(data, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=False, constrain_messages=PARAMS['constrain_messages']) for run_name, data in test_run_data.items()}
-                test_neighbors = {run_name: build_neighbors_index(data, global_agents) for run_name, data in test_run_data.items()}
+                test_neighbors = {run_name: build_neighbors_index(data, global_agents, reverse=REVERSE_GRAPH) for run_name, data in test_run_data.items()}
 
                 # Fit all adjacency-based models on pooled training data (to use for test rollouts)
                 #LAMBDA_GRID = np.linspace(0.0, 1.0, 50)
