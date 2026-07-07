@@ -5,32 +5,6 @@ from modeling.models.data_prep import build_dataset_from_run, build_expected_mes
 from modeling.models.adjacency_based.repulsion import _prepare_pooled_blocks_rep
 # TODO: pick a repulsion model (possibly may need to move _prepare_pooled_blocks_rep around for that)
 
-def _get_generic_social_kernel_term_force_based(x, neighbors, F, bound_type = 'clip'):
-
-    # : x : np.array of shape (n_agents, ) representing the opinions of agents
-    # : neighbors : list of lists, where neighbors[i] is a list of indices of agents who influence agent i
-    # : F : a kernel function that takes a non-negative float and returns a float
-    #           which will be used to weight neighbors' opinions
-    # : bound_type : str, either 'clip' or 'tanh', which determines how to bound the upda
-
-    n_agents = len(x)
-
-
-    for i in range(n_agents):
-
-        nbh = list(neighbors[i])
-
-        weights = [F(abs(x[j] - x[i])) for j in nbh]
-        nbh_delta = [x[j] - x[i] for j in nbh]
-
-        # normalize the weights so the absolute values sum to 1, if there are any weights
-        if len(weights) == 0:
-            raise ValueError(f"Agent {i} has no neighbors, cannot compute social kernel term.")
-        
-        weights = np.array(weights)
-        weights /= np.sum(np.abs(weights))
-
-        x[i] = np.sum([weights[j] * nbh_delta[j] for j in range(len(nbh))])
 
 
 def _get_generic_social_kernel_term_weight_based(x, Abar, F):
@@ -213,3 +187,63 @@ def fit_repulsion_fj_bias_mult(run_traj_map, run_neighbors, repulsion_version: s
         "beta_objective_map": beta_objective_map,
         "total_points": int(total_points)
     }
+
+def repulsion_mult_rollout(
+    Abar: np.ndarray,
+    lambda_self: float,
+    lambda_init: float,
+    lambda_social: float, 
+    lambda_bias: float, 
+    bias: float,
+    beta_rep: float,
+    x0: np.ndarray,
+    horizon: int,
+    repulsion_version: str,
+) -> np.ndarray:
+    
+    # check parameters are in valid ranges
+    if lambda_self < 0 or lambda_init < 0 or lambda_social < 0 or lambda_bias < 0:
+        raise ValueError("Lambda parameters must be non-negative.")
+    if not np.isclose(lambda_self + lambda_init + lambda_social + lambda_bias, 1.0):
+        raise ValueError("Lambda parameters must sum to 1.")
+    if bias < -1 or bias > 1:
+        raise ValueError("Bias must be in the range [-1, 1].")
+    if beta_rep < 0:
+        raise ValueError("beta_rep must be non-negative.")
+    
+    n1 = Abar.shape[0]
+    n2 = Abar.shape[1]
+    n3 = x0.shape[0]
+    if n1 != n2 or n1 != n3:
+        raise ValueError("Abar must be a square matrix and x0 must have the same length as Abar's dimensions.")
+    n = n1
+
+    # check that repulsion_version is valid
+    if repulsion_version not in ("weight-based", "force-based"):
+        raise ValueError("Invalid repulsion_version. Must be 'weight-based' or 'force-based'.")
+
+    # check that x0 is a 1D array
+    if x0.ndim != 1:
+        raise ValueError("x0 must be a 1D array.")
+    
+    current = x0.copy()
+
+    def _F_kernel(beta_rep , d: float):
+        if d < 0:
+            raise ValueError("Negative value sent to kernel")
+        return 1 - beta_rep * d
+    
+    predictions = [current.copy()]
+    for _ in range(int(horizon)):
+        if repulsion_version == "weight-based":
+            social_term = _get_generic_social_kernel_term_weight_based(current, Abar, lambda d: _F_kernel(beta_rep, d))
+        elif repulsion_version == "force-based":
+            raise NotImplementedError("Force-based repulsion not implemented yet")
+        current = (lambda_self * current + lambda_social * social_term + lambda_init * x0 + lambda_bias * bias)
+        predictions.append(current.copy())
+
+    traj = np.asarray(predictions, dtype=float)
+    if not (traj.shape[0] == horizon + 1 and traj.shape[1] == n):
+        raise ValueError(f"Trajectory shape {traj.shape} is not as expected ({horizon + 1}, {n})")
+    
+    return traj

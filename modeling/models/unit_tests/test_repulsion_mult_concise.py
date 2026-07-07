@@ -11,7 +11,8 @@ if str(ROOT) not in sys.path:
 
 from modeling.models.adjacency_based.repulsion_mult import (
     fit_repulsion_fj_bias_mult,
-    _get_generic_social_kernel_term_weight_based
+    _get_generic_social_kernel_term_weight_based,
+    repulsion_mult_rollout
 )
 
 from modeling.models.data_prep import (
@@ -111,6 +112,7 @@ def _sim_weight_based_mult_repulsion(Abar,
             social_term = np.zeros(n)
             for i in range(n):
                 weights_i = (1 - beta_rep * np.abs(x[i] - x)) * Abar[i,:]
+                print(weights_i)
                 weights_i /= np.sum(np.abs(weights_i))
                 social_term[i] = np.sum(weights_i * x)
 
@@ -423,8 +425,53 @@ class TestMultRepulsionWeightBasedRecovery(unittest.TestCase):
                     self.assertTrue(np.allclose(social_term_legacy, social_term_new, atol=1e-08))
 
 
+class TestMultRepulsionWeightBasedRollout(unittest.TestCase):
 
-        
+    def test_rollout(self):
+        """Test that the rollout function produces a trajectory of the correct shape and values."""
+        rng = np.random.default_rng(42)
+        n = 10
+        in_degree = 3
+
+        NUM_TRAJ = 10
+
+        for _ in range(NUM_TRAJ):
+            nbrs = _random_sparse(n, in_degree, rng)
+            Abar = build_expected_message_matrix(nbrs, n)
+            # sample random parameters
+            weights = rng.uniform(0.0, 1.0, size=4)
+            weights /= weights.sum()
+            l_soc, l_bias, l_init, _ = weights
+            beta_rep = rng.uniform(0.0, 5.0)
+            bias = rng.uniform(-1.0, 1.0)
+
+            run_traj = _sim_weight_based_mult_repulsion(
+                    Abar,
+                    lambda_self = 1.0 - l_soc - l_bias - l_init,
+                    lambda_social=l_soc,
+                    lambda_bias=l_bias,
+                    lambda_init=l_init,
+                    beta_rep=beta_rep,
+                    bias=bias,
+                    n_runs=1,
+                    horizon=10,
+                    rng=rng)
+            
+            rollout_result = repulsion_mult_rollout(
+                Abar = Abar,
+                lambda_self = 1.0 - l_soc - l_bias - l_init,
+                lambda_init = l_init,
+                lambda_social = l_soc,
+                lambda_bias = l_bias,
+                beta_rep = beta_rep,
+                bias = bias,
+                x0 = run_traj['run_00'][0],
+                horizon = 10,
+                repulsion_version='weight-based'
+            )
+
+            self.assertEqual(rollout_result.shape, (11, n))
+            self.assertTrue(np.allclose(rollout_result, run_traj['run_00'], atol=1e-08))
 
 if __name__ == "__main__":
 

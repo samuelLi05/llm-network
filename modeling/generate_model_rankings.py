@@ -36,6 +36,8 @@ from modeling.models.adjacency_based.homophily import (
     rollout_with_homophily_friedkin_johnsen,
 )  # type: ignore
 
+from modeling.models.adjacency_based.repulsion_mult import fit_repulsion_fj_bias_mult, repulsion_mult_rollout
+
 # NOTE: this script mirrors the notebook's evaluate logic but is a standalone runner that writes per-combo CSVs.
 
 MODEL_DISPLAY_NAMES = {
@@ -160,7 +162,8 @@ def evaluate_model(model_name, run_traj_map, rollout_map):
     }
 
 
-def save_gamma_objective_plot(gamma_objective_map: dict, fitted_gamma: float, model_name: str, out_path: Path) -> None:
+def save_objective_plot(gamma_objective_map: dict, fitted_gamma: float, model_name: str, out_path: Path,
+                        var_name: str = 'Gamma') -> None:
     """Save a 3-panel plot of gamma vs objective: linear-linear, x-log"""
     if not gamma_objective_map:
         return
@@ -184,7 +187,7 @@ def save_gamma_objective_plot(gamma_objective_map: dict, fitted_gamma: float, mo
     ]
 
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-    fig.suptitle(f'Gamma search — {model_name}', fontsize=11)
+    fig.suptitle(f'{var_name} search — {model_name}', fontsize=11)
 
     for ax, (xscale, yscale, subtitle) in zip(axes, panels):
         xs = gammas_pos if xscale == 'log' else gammas
@@ -194,13 +197,19 @@ def save_gamma_objective_plot(gamma_objective_map: dict, fitted_gamma: float, mo
 
         # fitted gamma marker — only draw axvline if gamma > 0 on log axes
         if xscale == 'linear' or fitted_gamma > 0:
+            if var_name == 'Gamma':
+                fit_symb = 'γ'
+            elif var_name == 'Beta':
+                fit_symb = 'β'
+            else:
+                fit_symb = var_name
             ax.axvline(fitted_gamma, color='red', linestyle='--', linewidth=1.0,
-                       label=f'fitted γ={fitted_gamma:.4g}')
+                       label=f'fitted {fit_symb}={fitted_gamma:.4g}')
             ax.scatter([fitted_gamma], [fitted_obj], color='red', zorder=5, s=50)
 
         ax.set_xscale(xscale)
         ax.set_yscale(yscale)
-        ax.set_xlabel('gamma')
+        ax.set_xlabel(f'{var_name}')
         ax.set_ylabel('objective (MSE)')
         ax.set_title(subtitle, fontsize=9)
         ax.legend(fontsize=7)
@@ -215,6 +224,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Generate model rankings and gamma-objective plots for all LLM/topic combos.')
     parser.add_argument('--reverse-graph', action='store_true', help='If set, interpret the graph edges in reverse direction when building neighbor indices.')
+    parser.add_argument('--omit-repulsion', action='store_true', help='If set, omit the repulsion-based models from evaluation ')
     args = parser.parse_args()
 
     # Raise error is --reverse-graph is false
@@ -223,7 +233,8 @@ if __name__ == '__main__':
 
     REVERSE_GRAPH = args.reverse_graph
     print("Reverse graph mode:", REVERSE_GRAPH)
-
+    
+    OMIT_REPULSION = args.omit_repulsion
 
     RUNS_DIR = ROOT / 'modeling' / 'runs'
     ALL_LLMS = sorted([d.name for d in RUNS_DIR.iterdir() if d.is_dir()])
@@ -303,6 +314,19 @@ if __name__ == '__main__':
                 TOTAL_POINTS_HOMOPHILY_STUB = int(BEST_HOMO_STUB.get('total_points', 0))
                 print("Finished fitting homophily Friedkin Johnsen with bias")
 
+                if not OMIT_REPULSION:
+                    BEST_REPULSION_WB = fit_repulsion_fj_bias_mult(run_traj, run_neighbors, repulsion_version='weight-based')
+                    REPULSION_WB_LAMBDA_SELF = BEST_REPULSION_WB.get('lambda_self', np.nan)
+                    REPULSION_WB_LAMBDA_SOCIAL = BEST_REPULSION_WB.get('lambda_social', np.nan)
+                    REPULSION_WB_LAMBDA_INIT = BEST_REPULSION_WB.get('lambda_init', np.nan)
+                    REPULSION_WB_LAMBDA_BIAS = BEST_REPULSION_WB.get('lambda_bias', np.nan)
+                    REPULSION_WB_BIAS = BEST_REPULSION_WB.get('bias', np.nan)
+                    REPULSION_WB_BETA_REP = BEST_REPULSION_WB.get('beta_rep', np.nan)
+                    TOTAL_POINTS_REPULSION_WB = int(BEST_REPULSION_WB.get('total_points', 0))
+                    if not TOTAL_POINTS_REPULSION_WB == TOTAL_POINTS_DG:
+                        raise ValueError("Total points do not match across models")
+                    print("Finished fitting repulsion-based model")
+
                 # raise exception if total points don't match
                 if not (TOTAL_POINTS_DG == TOTAL_POINTS_FJ == TOTAL_POINTS_FJ_BIAS == TOTAL_POINTS_HOMOPHILY == TOTAL_POINTS_HOMOPHILY_FJ == TOTAL_POINTS_HOMOPHILY_STUB):
                     raise ValueError("Total points do not match across models")
@@ -320,7 +344,7 @@ if __name__ == '__main__':
                     gmap = fit_obj.get('gamma_objective_map', {})
                     fitted_gamma = float(fit_obj.get('gamma', np.nan))
                     out_png = gamma_plots_dir / f'{model_label}_gamma_objective.png'
-                    save_gamma_objective_plot(gmap, fitted_gamma, model_label, out_png)
+                    save_objective_plot(gmap, fitted_gamma, model_label, out_png)
                     if gmap and model_label == 'homophily_stubbornness':
                         gmap_df = pd.DataFrame(
                             sorted(gmap.items()), columns=['gamma', 'objective_mse']
@@ -331,6 +355,22 @@ if __name__ == '__main__':
                         )
                 print(f'  Saved gamma-objective plots to: {gamma_plots_dir}')
                 print(f'  Saved gamma-objective CSVs to: {gamma_csv_dir}')
+
+                if not OMIT_REPULSION:
+                    # Save plots for beta-objective
+                    beta_plots_dir = combo_dir / 'beta_objective_plots' / llm_name / topic_name
+                    beta_plots_dir.mkdir(parents=True, exist_ok=True)
+                    beta_csv_dir = combo_dir / 'beta_objective_data' / llm_name / topic_name
+                    beta_csv_dir.mkdir(parents=True, exist_ok=True)
+
+                    for fit_obj, model_label in [
+                        (BEST_REPULSION_WB, 'repulsion_mult_wb'),
+                    ]:
+                        bmap = fit_obj.get('beta_objective_map', {})
+                        fitted_beta = float(fit_obj.get('beta_rep', np.nan))
+                        out_png = beta_plots_dir / f'{model_label}_beta_objective.png'
+                        save_objective_plot(bmap, fitted_beta, model_label, out_png, var_name='Beta')
+                        
 
                 def build_rollout_maps(traj_map, neighbors_map):
                     return {
@@ -399,6 +439,21 @@ if __name__ == '__main__':
                         )
                         for run_name in traj_map.keys()
                     },
+                    'repulsion_mult_wb': {
+                        run_name: repulsion_mult_rollout(
+                            Abar = build_row_normalized_adjacency(neighbors_map[run_name], n_agents),
+                            lambda_self = REPULSION_WB_LAMBDA_SELF,
+                            lambda_init = REPULSION_WB_LAMBDA_INIT,
+                            lambda_social = REPULSION_WB_LAMBDA_SOCIAL,
+                            lambda_bias = REPULSION_WB_LAMBDA_BIAS,
+                            bias = REPULSION_WB_BIAS,
+                            beta_rep = REPULSION_WB_BETA_REP,
+                            x0 = np.asarray(traj_map[run_name], dtype=float)[0],
+                            horizon = PARAMS['rollout_horizon_cap'],
+                            repulsion_version='weight-based'
+                        )
+                        for run_name in traj_map.keys()
+                    }
                 }
 
                 rollout_maps_test = build_rollout_maps(test_traj, test_neighbors)
@@ -433,6 +488,8 @@ if __name__ == '__main__':
                         summary_row['train_mse_pool'] = float(BEST_HOMO_FJ['mse_pool'])
                     elif raw_model_name == 'homophily_stubbornness':
                         summary_row['train_mse_pool'] = float(BEST_HOMO_STUB['mse_pool'])
+                    elif raw_model_name == 'repulsion_mult_wb':
+                        summary_row['train_mse_pool'] = float(BEST_REPULSION_WB['mse_pool'])
                     summary_row.update({'llm': llm_name, 'topic': topic_name, 'raw_model': raw_model_name, 'model': MODEL_DISPLAY_NAMES.get(raw_model_name, raw_model_name)})
                     summary_rows.append(summary_row)
 
@@ -516,9 +573,19 @@ if __name__ == '__main__':
                             'gamma': float(HOMO_STUB_GAMMA),
                             'total_points': TOTAL_POINTS_HOMOPHILY_STUB,
                         })
+                    elif raw_model_name == 'repulsion_mult_wb':
+                        optimal_params_rows.append({
+                            'model': MODEL_DISPLAY_NAMES.get(raw_model_name, raw_model_name),
+                            'init_weight': float(REPULSION_WB_LAMBDA_INIT),
+                            'bias_weight': float(REPULSION_WB_LAMBDA_BIAS),
+                            'bias': float(REPULSION_WB_BIAS),
+                            'self_weight': float(REPULSION_WB_LAMBDA_SELF),
+                            'social_weight': float(REPULSION_WB_LAMBDA_SOCIAL),
+                            'beta_rep': float(REPULSION_WB_BETA_REP),
+                            'total_points': TOTAL_POINTS_REPULSION_WB,
+                        })
                     else:
                         raise Exception
-
 
                 optimal_params_df = pd.DataFrame(optimal_params_rows)
                 params_dir = combo_dir / 'fitted_params'
