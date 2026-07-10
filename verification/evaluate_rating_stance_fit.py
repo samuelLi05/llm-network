@@ -7,6 +7,7 @@ import csv
 import sys
 import argparse
 import numpy as np
+import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +16,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from modeling.models.data_prep import _load_jsonl
+
+import rpy2
+
+import rpy2.robjects as ro
+from rpy2.robjects.packages import importr, isinstalled
+from rpy2.robjects.vectors import IntVector
+from rpy2.robjects import pandas2ri
 
 
 # These three parameters are fixed for the rating experiment
@@ -106,10 +114,33 @@ def load_ratings_and_stance_scores(rating_file_name,
         # Step 3. save the logged stance score
         new_row = row.copy()
         new_row['stance_score'] = msg_dict_ldd["published"]["stance_score"]
+        new_row['rating_num'] = int(row['rating_num'])
+        new_row['index'] = int(row['index'])
 
         data_list_new.append(new_row)
 
     return data_list_new
+
+def get_r_objects_for_processing(data):
+    # data: list of dicts with the fields 'rating_num' and 'stance_score'
+
+    df = pd.DataFrame(data)
+
+    with (ro.default_converter + pandas2ri.converter).context():
+
+        r_df_from_pd = ro.conversion.get_conversion().py2rpy(df)
+
+    r_rating = ro.r['ordered'](r_df_from_pd.rx2('rating_num'), levels = IntVector([1,2,3,4,5]))
+    r_stance_score = r_df_from_pd.rx2('stance_score')
+
+    # validation: check that nothing broke when converting to R-vectors
+    for i, item in enumerate(data):
+        fail = not ((item['rating_num'] == r_rating[i]) and (item['stance_score'] == r_stance_score[i]))
+        if fail:
+            raise RuntimeError("Error in parsing for r")
+
+    return r_rating, r_stance_score
+
 
 if __name__ == "__main__":
 
@@ -117,14 +148,23 @@ if __name__ == "__main__":
     parser.add_argument('--recompute_stances', action='store_true', help='If set, recompute the stances for the loaded messages, and check that they match what we have in the logs.')
     args = parser.parse_args()
 
+    embedding_analyzer = None
     if args.recompute_stances:
         from modeling.stance_analysis_for_modeling.embedding_analyzer_sync import EmbeddingAnalyzerSync
         embedding_analyzer = EmbeddingAnalyzerSync(topic = TOPIC_STATEMENT)
 
     f_names, annotators = get_named_csvs(TEMPLATE, RATING_DIR)
 
-    for f_name in f_names:
-        load_ratings_and_stance_scores(RATING_DIR / f_name, embedding_analyzer=embedding_analyzer)
+    for i, f_name in enumerate(f_names):
+        data_with_stances = load_ratings_and_stance_scores(RATING_DIR / f_name, embedding_analyzer=embedding_analyzer)
+
+        r_rating, r_stance_score = get_r_objects_for_processing(data_with_stances)
+
+        polycor = importr('polycor')
+        r_corr = polycor.polyserial(r_stance_score, r_rating)
+
+        print(f"For annotator \'{annotators[i]}\' with file \'{f_name}\', polyserial correlation is {r_corr}")
+
 
     print(f"Found annotator names : {annotators}")
     
