@@ -8,6 +8,7 @@ import sys
 import argparse
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -146,6 +147,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Evaluate the fit between human ratings and embedding-based ratings")
     parser.add_argument('--recompute_stances', action='store_true', help='If set, recompute the stances for the loaded messages, and check that they match what we have in the logs.')
+    parser.add_argument('--visualize', action='store_true', help='If set, Plot a scatter of the stance score and ratings.')
     args = parser.parse_args()
 
     embedding_analyzer = None
@@ -155,16 +157,26 @@ if __name__ == "__main__":
 
     f_names, annotators = get_named_csvs(TEMPLATE, RATING_DIR)
 
+    if args.visualize:
+        fig, axes = plt.subplots(1, len(f_names), sharey=True)
+        fig.supylabel('Rating')
     for i, f_name in enumerate(f_names):
         data_with_stances = load_ratings_and_stance_scores(RATING_DIR / f_name, embedding_analyzer=embedding_analyzer)
 
         r_rating, r_stance_score = get_r_objects_for_processing(data_with_stances)
 
         polycor = importr('polycor')
-        r_corr = polycor.polyserial(r_stance_score, r_rating)
+        r_corr = polycor.polyserial(r_stance_score, r_rating, threshold=True, ML = True)
 
         print(f"For annotator \'{annotators[i]}\' with file \'{f_name}\', polyserial correlation is {r_corr}")
 
+        if args.visualize:
+            axes[i].scatter(r_stance_score, r_rating)
+            axes[i].set_title(annotators[i])
+            axes[i].set_xlabel("Stance score")
+
+    if args.visualize:
+        plt.show()
 
     print(f"Found annotator names : {annotators}")
     
