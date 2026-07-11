@@ -39,6 +39,8 @@ RUN_LOCATION = ROOT / 'modeling' / 'runs' / LLM / TOPIC / 'train'
 # Threshold (in %) for stance recomputation errors
 STANCE_DELTA_THRESHOLD = 0.0
 
+# location for saving joint data with all raters' messages
+JOINT_RATING_LOCATION = ROOT / 'verification' / 'joint_rated_messages' / 'joint_rating_data.csv'
 
 def get_named_csvs(template: str, dir: Path):
 
@@ -144,6 +146,46 @@ def get_r_objects_for_processing(data):
 
     return r_rating, r_stance_score
 
+def merge_rating_data(rating_lists, annotator_names, save_location):
+
+    # validation
+    if not len(rating_lists) > 1: 
+        raise ValueError(f"rating_lists only contains {len(rating_lists)} sets of rating data")
+    for i in range(1, len(rating_lists)):
+        if not (len(rating_lists[0]) == len(rating_lists[i])):
+            raise ValueError(f"component lists 0 and {i} do not have the same lengths")
+        
+    joint_list = []
+    # jointly iterate over the lists, while validating that requisite fields match
+    match_fields = ['stance_score', 'index', 'dir_name', 'text']
+    for i in range(len(rating_lists[0])):
+
+        new_row = {}
+
+        # validate that all requisite fields match
+        for j in range(1,len(rating_lists)):
+            for field_name in match_fields:
+                match0 = rating_lists[0][i][field_name] == rating_lists[j][i][field_name]
+                if not match0:
+                    raise ValueError(f"Rating list 0 and list {j} do not match on field {field_name} at message {i}")
+
+        # build new row
+        for field_name in match_fields:
+            new_row[field_name] = rating_lists[0][i][field_name]
+
+        # add all annotators' data in fields indicating their names
+        for data, rater in zip(rating_lists, annotator_names):
+            field_name = f"rating_{rater}"
+            new_row[field_name] = data[i]['rating_num']
+
+        joint_list.append(new_row)
+
+    keys = joint_list[0].keys()
+    with save_location.open("w", newline='') as output_file:
+        dict_writer = csv.DictWriter(output_file, keys)
+        dict_writer.writeheader()
+        dict_writer.writerows(joint_list)
+
 
 if __name__ == "__main__":
 
@@ -167,8 +209,12 @@ if __name__ == "__main__":
             axes = axes.reshape(-1, 1)
         axes[0, 0].set_ylabel('Frequency')
         axes[1, 0].set_ylabel('Human rating')
+
+    data_with_stance_list = []
     for i, f_name in enumerate(f_names):
         data_with_stances = load_ratings_and_stance_scores(RATING_DIR / f_name, embedding_analyzer=embedding_analyzer)
+
+        data_with_stance_list.append(data_with_stances)
 
         r_rating, r_stance_score = get_r_objects_for_processing(data_with_stances)
 
@@ -187,7 +233,7 @@ if __name__ == "__main__":
             axes[1, i].set_title(f"Polyserial correlation ρ = {corr_val}", fontsize=10)
             axes[1, i].set_xlabel("Stance score")
 
-
+    merge_rating_data(rating_lists=data_with_stance_list, annotator_names=annotators, save_location=JOINT_RATING_LOCATION)
 
     if args.visualize:
         fig.tight_layout()
