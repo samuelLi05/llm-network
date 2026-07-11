@@ -27,7 +27,7 @@ from rpy2.robjects import pandas2ri
 
 
 # These three parameters are fixed for the rating experiment
-RATING_DIR = ROOT / 'verification' / 'sampled_messages_with_test_ratings'
+RATING_DIR = ROOT / 'verification' / 'sampled_messages_with_ratings'
 TEMPLATE = 'sampled_message_survey_'
 
 # LLM and topic details for rating experiment
@@ -68,13 +68,15 @@ def load_ratings_and_stance_scores(rating_file_name,
     data_list_new = []
     for row in data_list:
         # validate that the rating fields are correct
-        rating_star = row['rating']
-        rating_star_count = rating_star.count('★')
-
         rating_num = int(row['rating_num'])
+        if 'rating' in row.keys():
 
-        if not rating_num == rating_star_count:
-            raise ValueError("Mismatch in rating sources")
+            rating_star = row['rating']
+            rating_star_count = rating_star.count('★')
+
+            if not rating_num == rating_star_count:
+                raise ValueError("Mismatch in rating sources")
+
         if not rating_num in list(range(1,6)):
             raise ValueError("Invalid rating value")
         
@@ -158,8 +160,13 @@ if __name__ == "__main__":
     f_names, annotators = get_named_csvs(TEMPLATE, RATING_DIR)
 
     if args.visualize:
-        fig, axes = plt.subplots(1, len(f_names), sharey=True)
-        fig.supylabel('Rating')
+        fig, axes = plt.subplots(2, len(f_names),
+                                 figsize=(5 * len(f_names), 8),
+                                 sharey='row')
+        if len(f_names) == 1:
+            axes = axes.reshape(-1, 1)
+        axes[0, 0].set_ylabel('Frequency')
+        axes[1, 0].set_ylabel('Human rating')
     for i, f_name in enumerate(f_names):
         data_with_stances = load_ratings_and_stance_scores(RATING_DIR / f_name, embedding_analyzer=embedding_analyzer)
 
@@ -169,13 +176,21 @@ if __name__ == "__main__":
         r_corr = polycor.polyserial(r_stance_score, r_rating, threshold=True, ML = True)
 
         print(f"For annotator \'{annotators[i]}\' with file \'{f_name}\', polyserial correlation is {r_corr}")
+        if args.visualize:
+            axes[0,i].hist(r_rating)
+            axes[0,i].set_title(f"Rating distribution for {annotators[i]}")
+            axes[0,i].set_xlabel("Human rating")
 
         if args.visualize:
-            axes[i].scatter(r_stance_score, r_rating)
-            axes[i].set_title(annotators[i])
-            axes[i].set_xlabel("Stance score")
+            corr_val = round(float(r_corr[1][0]), 3)
+            axes[1, i].scatter(r_stance_score, r_rating, alpha=0.6, s=20)
+            axes[1, i].set_title(f"Polyserial correlation ρ = {corr_val}", fontsize=10)
+            axes[1, i].set_xlabel("Stance score")
+
+
 
     if args.visualize:
+        fig.tight_layout()
         plt.show()
 
     print(f"Found annotator names : {annotators}")
