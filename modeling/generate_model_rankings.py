@@ -36,7 +36,7 @@ from modeling.models.adjacency_based.homophily import (
     rollout_with_homophily_friedkin_johnsen,
 )  # type: ignore
 
-from modeling.models.adjacency_based.repulsion_mult import fit_repulsion_fj_bias_mult, repulsion_mult_rollout
+from modeling.models.adjacency_based.bias_only import fit_bias_only_model, bias_only_rollout
 
 # NOTE: this script mirrors the notebook's evaluate logic but is a standalone runner that writes per-combo CSVs.
 
@@ -47,6 +47,7 @@ MODEL_DISPLAY_NAMES = {
     'homophily': 'homophily',
     'homophily_friedkin_johnsen': 'homophily_friedkin_johnsen',
     'homophily_stubbornness': 'homophily_friedkin_johnsen_bias',
+    'bias_only': 'bias_only'
 }
 
 RANKING_METRIC_COLS = [
@@ -224,7 +225,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Generate model rankings and gamma-objective plots for all LLM/topic combos.')
     parser.add_argument('--reverse-graph', action='store_true', help='If set, interpret the graph edges in reverse direction when building neighbor indices.')
-    parser.add_argument('--omit-repulsion', action='store_true', help='If set, omit the repulsion-based models from evaluation ')
+    parser.add_argument('--include-repulsion', action='store_true', help='If set, includ the repulsion-based models from evaluation ')
     args = parser.parse_args()
 
     # Raise error is --reverse-graph is false
@@ -234,7 +235,9 @@ if __name__ == '__main__':
     REVERSE_GRAPH = args.reverse_graph
     print("Reverse graph mode:", REVERSE_GRAPH)
     
-    OMIT_REPULSION = args.omit_repulsion
+    OMIT_REPULSION = not args.include_repulsion
+    if not OMIT_REPULSION:
+        raise NotImplementedError("Repulsion models are no longer implementedd")
 
     RUNS_DIR = ROOT / 'modeling' / 'runs'
     ALL_LLMS = sorted([d.name for d in RUNS_DIR.iterdir() if d.is_dir()])
@@ -314,21 +317,15 @@ if __name__ == '__main__':
                 TOTAL_POINTS_HOMOPHILY_STUB = int(BEST_HOMO_STUB.get('total_points', 0))
                 print("Finished fitting homophily Friedkin Johnsen with bias")
 
-                if not OMIT_REPULSION:
-                    BEST_REPULSION_WB = fit_repulsion_fj_bias_mult(run_traj, run_neighbors, repulsion_version='weight-based')
-                    REPULSION_WB_LAMBDA_SELF = BEST_REPULSION_WB.get('lambda_self', np.nan)
-                    REPULSION_WB_LAMBDA_SOCIAL = BEST_REPULSION_WB.get('lambda_social', np.nan)
-                    REPULSION_WB_LAMBDA_INIT = BEST_REPULSION_WB.get('lambda_init', np.nan)
-                    REPULSION_WB_LAMBDA_BIAS = BEST_REPULSION_WB.get('lambda_bias', np.nan)
-                    REPULSION_WB_BIAS = BEST_REPULSION_WB.get('bias', np.nan)
-                    REPULSION_WB_BETA_REP = BEST_REPULSION_WB.get('beta_rep', np.nan)
-                    TOTAL_POINTS_REPULSION_WB = int(BEST_REPULSION_WB.get('total_points', 0))
-                    if not TOTAL_POINTS_REPULSION_WB == TOTAL_POINTS_DG:
-                        raise ValueError("Total points do not match across models")
-                    print("Finished fitting repulsion-based model")
+                BEST_BIAS_ONLY = fit_bias_only_model(run_traj)
+                BIAS_ONLY_LSELF = BEST_BIAS_ONLY.get('lambda_self', np.nan)
+                BIAS_ONLY_LBIAS = BEST_BIAS_ONLY.get('lambda_bias', np.nan)
+                BIAS_ONLY_BIAS_VAL = BEST_BIAS_ONLY.get('bias', np.nan)
+                TOTAL_POINTS_BIAS_ONLY = int(BEST_BIAS_ONLY.get('total_points', 0))
+                print("Finished fitting bias-only model")
 
                 # raise exception if total points don't match
-                if not (TOTAL_POINTS_DG == TOTAL_POINTS_FJ == TOTAL_POINTS_FJ_BIAS == TOTAL_POINTS_HOMOPHILY == TOTAL_POINTS_HOMOPHILY_FJ == TOTAL_POINTS_HOMOPHILY_STUB):
+                if not (TOTAL_POINTS_DG == TOTAL_POINTS_FJ == TOTAL_POINTS_FJ_BIAS == TOTAL_POINTS_HOMOPHILY == TOTAL_POINTS_HOMOPHILY_FJ == TOTAL_POINTS_HOMOPHILY_STUB == TOTAL_POINTS_BIAS_ONLY):
                     raise ValueError("Total points do not match across models")
 
                 # Save gamma-objective plots for each homophily model
@@ -355,21 +352,6 @@ if __name__ == '__main__':
                         )
                 print(f'  Saved gamma-objective plots to: {gamma_plots_dir}')
                 print(f'  Saved gamma-objective CSVs to: {gamma_csv_dir}')
-
-                if not OMIT_REPULSION:
-                    # Save plots for beta-objective
-                    beta_plots_dir = combo_dir / 'beta_objective_plots' / llm_name / topic_name
-                    beta_plots_dir.mkdir(parents=True, exist_ok=True)
-                    beta_csv_dir = combo_dir / 'beta_objective_data' / llm_name / topic_name
-                    beta_csv_dir.mkdir(parents=True, exist_ok=True)
-
-                    for fit_obj, model_label in [
-                        (BEST_REPULSION_WB, 'repulsion_mult_wb'),
-                    ]:
-                        bmap = fit_obj.get('beta_objective_map', {})
-                        fitted_beta = float(fit_obj.get('beta_rep', np.nan))
-                        out_png = beta_plots_dir / f'{model_label}_beta_objective.png'
-                        save_objective_plot(bmap, fitted_beta, model_label, out_png, var_name='Beta')
                         
 
                 def build_rollout_maps(traj_map, neighbors_map):
@@ -439,18 +421,13 @@ if __name__ == '__main__':
                         )
                         for run_name in traj_map.keys()
                     },
-                    'repulsion_mult_wb': {
-                        run_name: repulsion_mult_rollout(
-                            Abar = build_row_normalized_adjacency(neighbors_map[run_name], n_agents),
-                            lambda_self = REPULSION_WB_LAMBDA_SELF,
-                            lambda_init = REPULSION_WB_LAMBDA_INIT,
-                            lambda_social = REPULSION_WB_LAMBDA_SOCIAL,
-                            lambda_bias = REPULSION_WB_LAMBDA_BIAS,
-                            bias = REPULSION_WB_BIAS,
-                            beta_rep = REPULSION_WB_BETA_REP,
+                    'bias_only': {
+                        run_name: bias_only_rollout(
+                            lambda_self = BIAS_ONLY_LSELF,
+                            lambda_bias = BIAS_ONLY_LBIAS,
+                            bias = BIAS_ONLY_BIAS_VAL,
                             x0 = np.asarray(traj_map[run_name], dtype=float)[0],
-                            horizon = PARAMS['rollout_horizon_cap'],
-                            repulsion_version='weight-based'
+                            horizon=PARAMS['rollout_horizon_cap']
                         )
                         for run_name in traj_map.keys()
                     }
@@ -488,8 +465,8 @@ if __name__ == '__main__':
                         summary_row['train_mse_pool'] = float(BEST_HOMO_FJ['mse_pool'])
                     elif raw_model_name == 'homophily_stubbornness':
                         summary_row['train_mse_pool'] = float(BEST_HOMO_STUB['mse_pool'])
-                    elif raw_model_name == 'repulsion_mult_wb':
-                        summary_row['train_mse_pool'] = float(BEST_REPULSION_WB['mse_pool'])
+                    elif raw_model_name == 'bias_only':
+                        summary_row['train_mse_pool'] = float(BEST_BIAS_ONLY['mse_pool'])
                     summary_row.update({'llm': llm_name, 'topic': topic_name, 'raw_model': raw_model_name, 'model': MODEL_DISPLAY_NAMES.get(raw_model_name, raw_model_name)})
                     summary_rows.append(summary_row)
 
@@ -573,16 +550,12 @@ if __name__ == '__main__':
                             'gamma': float(HOMO_STUB_GAMMA),
                             'total_points': TOTAL_POINTS_HOMOPHILY_STUB,
                         })
-                    elif raw_model_name == 'repulsion_mult_wb':
+                    elif raw_model_name == 'bias_only':
                         optimal_params_rows.append({
                             'model': MODEL_DISPLAY_NAMES.get(raw_model_name, raw_model_name),
-                            'init_weight': float(REPULSION_WB_LAMBDA_INIT),
-                            'bias_weight': float(REPULSION_WB_LAMBDA_BIAS),
-                            'bias': float(REPULSION_WB_BIAS),
-                            'self_weight': float(REPULSION_WB_LAMBDA_SELF),
-                            'social_weight': float(REPULSION_WB_LAMBDA_SOCIAL),
-                            'beta_rep': float(REPULSION_WB_BETA_REP),
-                            'total_points': TOTAL_POINTS_REPULSION_WB,
+                            'bias_weight': float(BIAS_ONLY_LBIAS),
+                            'bias': float(BIAS_ONLY_BIAS_VAL),
+                            'self_weight': float(BIAS_ONLY_LSELF)
                         })
                     else:
                         raise Exception
