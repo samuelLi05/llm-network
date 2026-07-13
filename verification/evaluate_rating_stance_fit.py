@@ -118,7 +118,7 @@ def load_ratings_and_stance_scores(rating_file_name,
             
         # Step 3. save the logged stance score
         new_row = row.copy()
-        new_row['stance_score'] = msg_dict_ldd["published"]["stance_score"]
+        new_row['stance_score'] = np.tanh(2*(msg_dict_ldd["published"]["stance_score"] - 0.55))
         new_row['rating_num'] = int(row['rating_num'])
         new_row['index'] = int(row['index'])
 
@@ -186,12 +186,50 @@ def merge_rating_data(rating_lists, annotator_names, save_location):
         dict_writer.writeheader()
         dict_writer.writerows(joint_list)
 
+def build_scaled_ratings_vector(r_ratings, thresholds):
+
+    new_rating_list = []
+
+    if not len(thresholds) == 4:
+        raise ValueError("Invalid threshold list; should contain four values")
+    sorted = True
+    for i in range(len(thresholds) - 1):
+        if thresholds[i+1] < thresholds[i]:
+            sorted = False
+    if not sorted:
+        raise ValueError("Invalid threshold list; should be sorted")
+
+    rating_to_latent_dict = {}  # Build a mapping from each human-given rating to a latent value
+    widths = []
+
+    # map ratings 2,3,4 to the mid-points of the thresholds defined by indices (0,1),(1,2) and (2,3) respectively.
+    for i in range(len(thresholds) - 1):
+        rating_to_latent_dict[i+2] = (thresholds[i+1] + thresholds[i])/2
+        widths.append(thresholds[i+1] - thresholds[i])
+
+    widths = np.array(widths)
+    avg_width = np.mean(widths)
+
+    # for ratings 1 and 5 place them at half the average width away from the lowest and highest thresholds respectively.
+    rating_to_latent_dict[1] = float(thresholds[0] - avg_width/2)
+    rating_to_latent_dict[5] = float(thresholds[3] + avg_width/2)
+
+    for i in range(len(r_ratings)):
+        if not r_ratings[i] in [1,2,3,4,5]:
+            raise ValueError("Invalid rating value")
+        
+        new_rating_list.append(rating_to_latent_dict[r_ratings[i]])
+
+    return new_rating_list
+    
+
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Evaluate the fit between human ratings and embedding-based ratings")
     parser.add_argument('--recompute_stances', action='store_true', help='If set, recompute the stances for the loaded messages, and check that they match what we have in the logs.')
     parser.add_argument('--visualize', action='store_true', help='If set, Plot a scatter of the stance score and ratings.')
+    parser.add_argument('--scale_rating_axis', action='store_true', help='If set, for y axis of human ratings vs. stance scores, map the human ratings approximately on to the threshold values')
     args = parser.parse_args()
 
     embedding_analyzer = None
@@ -208,7 +246,10 @@ if __name__ == "__main__":
         if len(f_names) == 1:
             axes = axes.reshape(-1, 1)
         axes[0, 0].set_ylabel('Frequency')
-        axes[1, 0].set_ylabel('Human rating')
+        if args.scale_rating_axis:
+            axes[1,0].set_ylabel("Human rating (latent estimate)")
+        else:
+            axes[1,0].set_ylabel("Human rating")
 
     data_with_stance_list = []
     for i, f_name in enumerate(f_names):
@@ -229,7 +270,13 @@ if __name__ == "__main__":
 
         if args.visualize:
             corr_val = round(float(r_corr[1][0]), 3)
-            axes[1, i].scatter(r_stance_score, r_rating, alpha=0.6, s=20)
+            
+            if args.scale_rating_axis:
+                rating_var = build_scaled_ratings_vector(r_ratings=r_rating, thresholds=r_corr[2])
+            else:
+                rating_var = r_rating
+
+            axes[1, i].scatter(r_stance_score, rating_var, alpha=0.6, s=20)
             axes[1, i].set_title(f"Polyserial correlation ρ = {corr_val}", fontsize=10)
             axes[1, i].set_xlabel("Stance score")
 
