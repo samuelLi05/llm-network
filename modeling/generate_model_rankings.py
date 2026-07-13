@@ -37,6 +37,7 @@ from modeling.models.adjacency_based.homophily import (
 )  # type: ignore
 
 from modeling.models.adjacency_based.bias_only import fit_bias_only_model, bias_only_rollout
+from modeling.models.adjacency_based.bias_only import fit_bias_init_only_model, bias_init_only_rollout
 
 # NOTE: this script mirrors the notebook's evaluate logic but is a standalone runner that writes per-combo CSVs.
 
@@ -47,7 +48,8 @@ MODEL_DISPLAY_NAMES = {
     'homophily': 'homophily',
     'homophily_friedkin_johnsen': 'homophily_friedkin_johnsen',
     'homophily_stubbornness': 'homophily_friedkin_johnsen_bias',
-    'bias_only': 'bias_only'
+    'bias_only': 'bias_only',
+    'bias_init_only': 'bias_init_only',
 }
 
 RANKING_METRIC_COLS = [
@@ -324,8 +326,16 @@ if __name__ == '__main__':
                 TOTAL_POINTS_BIAS_ONLY = int(BEST_BIAS_ONLY.get('total_points', 0))
                 print("Finished fitting bias-only model")
 
+                BEST_BIAS_INIT_ONLY = fit_bias_init_only_model(run_traj)
+                BIAS_INIT_ONLY_LSELF = BEST_BIAS_INIT_ONLY.get('lambda_self', np.nan)
+                BIAS_INIT_ONLY_LBIAS = BEST_BIAS_INIT_ONLY.get('lambda_bias', np.nan)
+                BIAS_INIT_ONLY_LINIT = BEST_BIAS_INIT_ONLY.get('lambda_init', np.nan)
+                BIAS_INIT_ONLY_BIAS_VAL = BEST_BIAS_INIT_ONLY.get('bias', np.nan)
+                TOTAL_POINTS_BIAS_INIT_ONLY = int(BEST_BIAS_INIT_ONLY.get('total_points', 0))
+                print("Finished fitting bias-init-only model")
+
                 # raise exception if total points don't match
-                if not (TOTAL_POINTS_DG == TOTAL_POINTS_FJ == TOTAL_POINTS_FJ_BIAS == TOTAL_POINTS_HOMOPHILY == TOTAL_POINTS_HOMOPHILY_FJ == TOTAL_POINTS_HOMOPHILY_STUB == TOTAL_POINTS_BIAS_ONLY):
+                if not (TOTAL_POINTS_DG == TOTAL_POINTS_FJ == TOTAL_POINTS_FJ_BIAS == TOTAL_POINTS_HOMOPHILY == TOTAL_POINTS_HOMOPHILY_FJ == TOTAL_POINTS_HOMOPHILY_STUB == TOTAL_POINTS_BIAS_ONLY == TOTAL_POINTS_BIAS_INIT_ONLY):
                     raise ValueError("Total points do not match across models")
 
                 # Save gamma-objective plots for each homophily model
@@ -430,6 +440,17 @@ if __name__ == '__main__':
                             horizon=PARAMS['rollout_horizon_cap']
                         )
                         for run_name in traj_map.keys()
+                    },
+                    'bias_init_only': {
+                        run_name: bias_init_only_rollout(
+                            lambda_self = BIAS_INIT_ONLY_LSELF,
+                            lambda_bias = BIAS_INIT_ONLY_LBIAS,
+                            bias = BIAS_INIT_ONLY_BIAS_VAL,
+                            lambda_init = BIAS_INIT_ONLY_LINIT,
+                            x0 = np.asarray(traj_map[run_name], dtype=float)[0],
+                            horizon=PARAMS['rollout_horizon_cap']
+                        )
+                        for run_name in traj_map.keys()
                     }
                 }
 
@@ -467,6 +488,8 @@ if __name__ == '__main__':
                         summary_row['train_mse_pool'] = float(BEST_HOMO_STUB['mse_pool'])
                     elif raw_model_name == 'bias_only':
                         summary_row['train_mse_pool'] = float(BEST_BIAS_ONLY['mse_pool'])
+                    elif raw_model_name == 'bias_init_only':
+                        summary_row['train_mse_pool'] = float(BEST_BIAS_INIT_ONLY['mse_pool'])
                     summary_row.update({'llm': llm_name, 'topic': topic_name, 'raw_model': raw_model_name, 'model': MODEL_DISPLAY_NAMES.get(raw_model_name, raw_model_name)})
                     summary_rows.append(summary_row)
 
@@ -556,6 +579,14 @@ if __name__ == '__main__':
                             'bias_weight': float(BIAS_ONLY_LBIAS),
                             'bias': float(BIAS_ONLY_BIAS_VAL),
                             'self_weight': float(BIAS_ONLY_LSELF)
+                        })
+                    elif raw_model_name == 'bias_init_only':
+                        optimal_params_rows.append({
+                            'model': MODEL_DISPLAY_NAMES.get(raw_model_name, raw_model_name),
+                            'bias_weight': float(BIAS_INIT_ONLY_LBIAS),
+                            'bias': float(BIAS_INIT_ONLY_BIAS_VAL),
+                            'init_weight': float(BIAS_INIT_ONLY_LINIT),
+                            'self_weight': float(BIAS_INIT_ONLY_LSELF)
                         })
                     else:
                         raise Exception
