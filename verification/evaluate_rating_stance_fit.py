@@ -260,7 +260,7 @@ if __name__ == "__main__":
         r_rating, r_stance_score = get_r_objects_for_processing(data_with_stances)
 
         polycor = importr('polycor')
-        r_corr = polycor.polyserial(r_stance_score, r_rating, threshold=True, ML = True)
+        r_corr = polycor.polyserial(r_stance_score, r_rating, threshold=True, ML = True, std_err = True)
 
         print(f"For annotator \'{annotators[i]}\' with file \'{f_name}\', polyserial correlation is {r_corr}")
         if args.visualize:
@@ -269,7 +269,8 @@ if __name__ == "__main__":
             axes[0,i].set_xlabel("Human rating")
 
         if args.visualize:
-            corr_val = round(float(r_corr[1][0]), 3)
+            corr_val = round(float(r_corr.rx2('rho')[0]), 3)
+            corr_std = round(float(np.sqrt(np.array(r_corr.rx2('var'))[0,0])), 3)
             
             if args.scale_rating_axis:
                 rating_var = build_scaled_ratings_vector(r_ratings=r_rating, thresholds=r_corr[2])
@@ -277,7 +278,7 @@ if __name__ == "__main__":
                 rating_var = r_rating
 
             axes[1, i].scatter(r_stance_score, rating_var, alpha=0.6, s=20)
-            axes[1, i].set_title(f"Polyserial correlation ρ = {corr_val}", fontsize=10)
+            axes[1, i].set_title(f"Polyserial correlation ρ = {corr_val} ({corr_std})", fontsize=10)
             axes[1, i].set_xlabel("Stance score")
 
     merge_rating_data(rating_lists=data_with_stance_list, annotator_names=annotators, save_location=JOINT_RATING_LOCATION)
