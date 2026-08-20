@@ -29,6 +29,7 @@ RATE_PER_S = (POISSON_MEAN / (TIME_UNIT_MS / 1000.0))  # (incorrect but kept for
 def redefine_init_opinions(original_run_dir,
                            embedding_analyzer = None,
                            error_tolerance = 1e-03,     # tolerance for differences in recomputed init opinions
+                           init_opinion_mismatch_as_print = False,
                            ):
 
     # Get the list of agents
@@ -73,7 +74,10 @@ def redefine_init_opinions(original_run_dir,
 
         if init_opinion_saved is not None:
             if abs(init_opinion_saved - init_opinion_recomputed)/init_opinion_saved > error_tolerance:
-                raise ValueError(f'Initial opinion mismatch for {a_id}: logged={init_opinion_saved}, recomputed={init_opinion_recomputed}')
+                if init_opinion_mismatch_as_print:
+                    print(f'Initial opinion mismatch for {a_id}: logged={init_opinion_saved}, recomputed={init_opinion_recomputed}')
+                else:
+                    raise ValueError(f'Initial opinion mismatch for {a_id}: logged={init_opinion_saved}, recomputed={init_opinion_recomputed}')
 
         initial_stance_map[a_id] = {
             "sim_logged": init_opinion_saved,
@@ -87,13 +91,20 @@ def redefine_init_opinions(original_run_dir,
 
 def clean_log_times_and_init(experiment_dir, out_dir, poisson_lambda, rng = None,
                              embedding_analyzer = None,
-                             view_init_opinions_for_debug = False):
+                             view_init_opinions_for_debug = False,
+                             re_embed_all_messages = False,
+                             skip_file_write_test = False):
 
     # Correct the interarrival times and initial opinions in the log files for a given
     #  experiment directory. This is necessary because the logs may contain artifacts due to asyncio, which can affect the analysis of inter-post times.
 
     # assumption: experiment_dir is a Path object pointing to train/test directions
     #  which in turn contain runs
+
+    # use re_embed_all_messages to determine whether to re-embed all messages
+    #  or just the initial opinions,
+    # skip_file_write_test is used to skip the file write for testing
+
 
     experiment_dir = Path(experiment_dir)
     out_dir = Path(out_dir)
@@ -107,12 +118,19 @@ def clean_log_times_and_init(experiment_dir, out_dir, poisson_lambda, rng = None
     if rng is None:
         rng = random.Random(1234)
 
+    # object for saving in the case where we want to 
+    #  return the message lists to test scripts
+    if skip_file_write_test:
+        message_list_out_dict = {'train': {}, 'test': {}}
+
     for split_dir in sorted(experiment_dir.iterdir()):
         if not split_dir.is_dir():
-            continue
+            raise ValueError(f'Expected directory, got file: {split_dir}')
+        if not split_dir.name in ['train', 'test']:
+            raise ValueError(f'Unexpected directory name: {split_dir.name}. Expected "train" or "test".')
         for run_dir in tqdm(sorted(split_dir.iterdir()), desc=f"Processing {experiment_dir.name}/{split_dir.name}"):
             if not run_dir.is_dir():
-                continue
+                raise ValueError(f'Expected directory, got file: {run_dir}')
 
 
             # ensure out_dir / split_dir.name / run_dir.name exists
@@ -132,7 +150,8 @@ def clean_log_times_and_init(experiment_dir, out_dir, poisson_lambda, rng = None
                 path_old = original_run_dir / fn
                 path_new = out_run_dir / fn
 
-                shutil.copy(path_old, path_new)
+                if not skip_file_write_test:
+                    shutil.copy(path_old, path_new)
 
             # STAGE 2: 
             # parse the messages_with_alignment.jsonl file, correct the interarrival times and write a new file to the out_dir
@@ -165,9 +184,23 @@ def clean_log_times_and_init(experiment_dir, out_dir, poisson_lambda, rng = None
                 new_row['sender_id'] = row['sender_id']
                 new_row['message'] = row['message']
                 new_row['index'] = row['index']
-                new_row['published'] = {
-                    'stance_score' : row['published']['stance_score']
-                }
+
+
+                if re_embed_all_messages:
+                    old_stance_score = row['published']['stance_score']
+
+                    message_str = row['message']
+                    scored = embedding_analyzer.embed_and_score(message_str)
+                    new_row['published'] = {
+                        'stance_score' : scored['stance_score']
+                    }
+
+                    new_row['published']['old_stance_score'] = old_stance_score
+
+                else:
+                    new_row['published'] = {
+                        'stance_score' : row['published']['stance_score']
+                    }
                 new_row['used_indices'] = row['used_indices']
                 new_row['recommendation_indices'] = row['recommendation_indices']
                 new_row['time'] = {
@@ -181,22 +214,28 @@ def clean_log_times_and_init(experiment_dir, out_dir, poisson_lambda, rng = None
                 new_rows.append(new_row)
             
             # write the new rows to the out_dir
-            with open(out_run_dir / 'messages_with_alignment.jsonl', 'w', encoding='utf-8') as f:
-                for row in new_rows:
-                    f.write(json.dumps(row, ensure_ascii=False) + '\n')
+            if not skip_file_write_test:
+                with open(out_run_dir / 'messages_with_alignment.jsonl', 'w', encoding='utf-8') as f:
+                    for row in new_rows:
+                        f.write(json.dumps(row, ensure_ascii=False) + '\n')
+            else:
+                message_list_out_dict[split_dir.name][run_dir.name] = new_rows
 
             # STAGE 3: build a directory of initial opinions 
             #   using the stance analyzer
             #   (as a sanity check, we can compare these to the logged initial opinions in the per_agent jsonl files)
-            initial_stance_map = redefine_init_opinions(original_run_dir, embedding_analyzer=embedding_analyzer)
+            initial_stance_map = redefine_init_opinions(original_run_dir, 
+                                                        embedding_analyzer=embedding_analyzer,
+                                                        init_opinion_mismatch_as_print=skip_file_write_test)
             if split_dir.name == 'train':
                 for a_id, stance_info in initial_stance_map.items():
                     ss_sim_logged_list.append(stance_info["sim_logged"])
                     ss_recomputed_list.append(stance_info["recomputed"])
 
             # save initial_stance_map to out_dir / split_dir.name / run_dir.name / initial_stance_map.json
-            with open(out_run_dir / 'initial_stance_map.json', 'w', encoding='utf-8') as f:
-                json.dump(initial_stance_map, f, ensure_ascii=False, indent=4)
+            if not skip_file_write_test:
+                with open(out_run_dir / 'initial_stance_map.json', 'w', encoding='utf-8') as f:
+                    json.dump(initial_stance_map, f, ensure_ascii=False, indent=4)
 
     # plot the logged vs recomputed initial opinions
     if view_init_opinions_for_debug:
@@ -208,6 +247,11 @@ def clean_log_times_and_init(experiment_dir, out_dir, poisson_lambda, rng = None
         plt.grid(True)
         plt.show()
 
+    if skip_file_write_test:
+        return {
+            "message_list_out_dict": message_list_out_dict
+        }
+
 
 if __name__ == "__main__":
 
@@ -218,24 +262,24 @@ if __name__ == "__main__":
         topic=topic
     )
 
-    rng = random.Random(1234)
-    clean_log_times_and_init(experiment_dir='modeling/runs_varied_size/llama3.1/vaccines/n_30', 
-                             out_dir = 'modeling/runs_varied_size_corrected/llama3.1/vaccines/n_30',
-                             poisson_lambda=RATE_PER_S,
-                             rng = rng,
-                             embedding_analyzer = embedding_analyzer,
-                             view_init_opinions_for_debug = True)
+    # rng = random.Random(1234)
+    # clean_log_times_and_init(experiment_dir='modeling/runs_varied_size/llama3.1/vaccines/n_30', 
+    #                          out_dir = 'modeling/runs_varied_size_corrected/llama3.1/vaccines/n_30',
+    #                          poisson_lambda=RATE_PER_S,
+    #                          rng = rng,
+    #                          embedding_analyzer = embedding_analyzer,
+    #                          view_init_opinions_for_debug = True)
     
-    clean_log_times_and_init(experiment_dir='modeling/runs_varied_size/llama3.1/vaccines/n_60', 
-                             out_dir = 'modeling/runs_varied_size_corrected/llama3.1/vaccines/n_60',
-                             poisson_lambda=RATE_PER_S,
-                             rng=rng,
-                             embedding_analyzer = embedding_analyzer,
-                             view_init_opinions_for_debug=True)
+    # clean_log_times_and_init(experiment_dir='modeling/runs_varied_size/llama3.1/vaccines/n_60', 
+    #                          out_dir = 'modeling/runs_varied_size_corrected/llama3.1/vaccines/n_60',
+    #                          poisson_lambda=RATE_PER_S,
+    #                          rng=rng,
+    #                          embedding_analyzer = embedding_analyzer,
+    #                          view_init_opinions_for_debug=True)
                              
-    clean_log_times_and_init(experiment_dir='modeling/runs_varied_size/llama3.1/vaccines/n_100', 
-                             out_dir = 'modeling/runs_varied_size_corrected/llama3.1/vaccines/n_100',
-                             poisson_lambda=RATE_PER_S,
-                             rng=rng,
-                             embedding_analyzer = embedding_analyzer,
-                             view_init_opinions_for_debug=True)
+    # clean_log_times_and_init(experiment_dir='modeling/runs_varied_size/llama3.1/vaccines/n_100', 
+    #                          out_dir = 'modeling/runs_varied_size_corrected/llama3.1/vaccines/n_100',
+    #                          poisson_lambda=RATE_PER_S,
+    #                          rng=rng,
+    #                          embedding_analyzer = embedding_analyzer,
+    #                          view_init_opinions_for_debug=True)
