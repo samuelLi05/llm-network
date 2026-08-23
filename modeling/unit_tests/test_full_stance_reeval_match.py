@@ -1,6 +1,9 @@
 """
-Unit tests for checking log_correcter.py functionality when we re-evaluate
-the stance of all messages in all runs
+(Partial) unit tests for checking log_correcter.py functionality when we re-evaluate
+the stance of all messages in all runs.
+
+In particular, this file focusses on checking that, when we reembed with the prompts used for
+embedding during experiments, we recover the same values
 """
 
 import unittest

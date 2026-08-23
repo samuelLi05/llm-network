@@ -1,3 +1,4 @@
 test_data_fixed_out/
+test_data_fixed_full_reeval_out
 # keep test_data_fixed as this comprises reference data for the testing code.
 temp_test_logs/

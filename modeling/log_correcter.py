@@ -30,6 +30,7 @@ def redefine_init_opinions(original_run_dir,
                            embedding_analyzer = None,
                            error_tolerance = 1e-03,     # tolerance for differences in recomputed init opinions
                            init_opinion_mismatch_as_print = False,
+                           bypass_init_match_validation = False
                            ):
 
     # Get the list of agents
@@ -73,11 +74,12 @@ def redefine_init_opinions(original_run_dir,
         init_opinion_recomputed = scored['stance_score']
 
         if init_opinion_saved is not None:
-            if abs(init_opinion_saved - init_opinion_recomputed)/init_opinion_saved > error_tolerance:
-                if init_opinion_mismatch_as_print:
-                    print(f'Initial opinion mismatch for {a_id}: logged={init_opinion_saved}, recomputed={init_opinion_recomputed}')
-                else:
-                    raise ValueError(f'Initial opinion mismatch for {a_id}: logged={init_opinion_saved}, recomputed={init_opinion_recomputed}')
+            if not bypass_init_match_validation:
+                if abs(init_opinion_saved - init_opinion_recomputed)/init_opinion_saved > error_tolerance:
+                    if init_opinion_mismatch_as_print:
+                        print(f'Initial opinion mismatch for {a_id}: logged={init_opinion_saved}, recomputed={init_opinion_recomputed}')
+                    else:
+                        raise ValueError(f'Initial opinion mismatch for {a_id}: logged={init_opinion_saved}, recomputed={init_opinion_recomputed}')
 
         initial_stance_map[a_id] = {
             "sim_logged": init_opinion_saved,
@@ -93,7 +95,10 @@ def clean_log_times_and_init(experiment_dir, out_dir, poisson_lambda, rng = None
                              embedding_analyzer = None,
                              view_init_opinions_for_debug = False,
                              re_embed_all_messages = False,
-                             skip_file_write_test = False):
+                             skip_file_write_test = False,
+                             return_out_dict = False,
+                             bypass_init_match_validation = False,
+                             skip_time_reassignment = False):
 
     # Correct the interarrival times and initial opinions in the log files for a given
     #  experiment directory. This is necessary because the logs may contain artifacts due to asyncio, which can affect the analysis of inter-post times.
@@ -104,7 +109,9 @@ def clean_log_times_and_init(experiment_dir, out_dir, poisson_lambda, rng = None
     # use re_embed_all_messages to determine whether to re-embed all messages
     #  or just the initial opinions,
     # skip_file_write_test is used to skip the file write for testing
-
+    # bypass_init_match_validation is used to bypass the validation of initial opinions, 
+    #  which we need to do for rescoring
+    # skip_time_reassigment is used to skip the time reassignment, which we need to do for rescoring
 
     experiment_dir = Path(experiment_dir)
     out_dir = Path(out_dir)
@@ -120,8 +127,7 @@ def clean_log_times_and_init(experiment_dir, out_dir, poisson_lambda, rng = None
 
     # object for saving in the case where we want to 
     #  return the message lists to test scripts
-    if skip_file_write_test:
-        message_list_out_dict = {'train': {}, 'test': {}}
+    message_list_out_dict = {'train': {}, 'test': {}}
 
     for split_dir in sorted(experiment_dir.iterdir()):
         if not split_dir.is_dir():
@@ -203,10 +209,17 @@ def clean_log_times_and_init(experiment_dir, out_dir, poisson_lambda, rng = None
                     }
                 new_row['used_indices'] = row['used_indices']
                 new_row['recommendation_indices'] = row['recommendation_indices']
-                new_row['time'] = {
-                    't_s' : simulated_time_s,
-                    't_ms' : simulated_time_s * 1000
-                }
+                if skip_time_reassignment:
+                    new_row['time'] = {
+                        't_s' : row['time']['t_s'],
+                        't_ms' : row['time']['t_ms']
+                    }
+
+                else:
+                    new_row['time'] = {
+                        't_s' : simulated_time_s,
+                        't_ms' : simulated_time_s * 1000
+                    }
 
                 # increment according to given exponential parameter
                 simulated_time_s += rng.expovariate(poisson_lambda)
@@ -218,15 +231,15 @@ def clean_log_times_and_init(experiment_dir, out_dir, poisson_lambda, rng = None
                 with open(out_run_dir / 'messages_with_alignment.jsonl', 'w', encoding='utf-8') as f:
                     for row in new_rows:
                         f.write(json.dumps(row, ensure_ascii=False) + '\n')
-            else:
-                message_list_out_dict[split_dir.name][run_dir.name] = new_rows
+            message_list_out_dict[split_dir.name][run_dir.name] = new_rows
 
             # STAGE 3: build a directory of initial opinions 
             #   using the stance analyzer
             #   (as a sanity check, we can compare these to the logged initial opinions in the per_agent jsonl files)
             initial_stance_map = redefine_init_opinions(original_run_dir, 
                                                         embedding_analyzer=embedding_analyzer,
-                                                        init_opinion_mismatch_as_print=skip_file_write_test)
+                                                        init_opinion_mismatch_as_print=skip_file_write_test,
+                                                        bypass_init_match_validation=bypass_init_match_validation)
             if split_dir.name == 'train':
                 for a_id, stance_info in initial_stance_map.items():
                     ss_sim_logged_list.append(stance_info["sim_logged"])
@@ -247,7 +260,7 @@ def clean_log_times_and_init(experiment_dir, out_dir, poisson_lambda, rng = None
         plt.grid(True)
         plt.show()
 
-    if skip_file_write_test:
+    if skip_file_write_test or return_out_dict:
         return {
             "message_list_out_dict": message_list_out_dict
         }
