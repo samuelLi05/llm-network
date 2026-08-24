@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 # Import notebook-used helpers
 from modeling.models.data_prep import load_run_data, build_run_trajectory, build_neighbors_index, _numeric_agent_key, build_row_normalized_adjacency  # type: ignore
+from modeling.models.data_prep_network_size import load_cleaned_run_data, build_run_trajectory_from_clean
 from modeling.models.analysis_utils import (  # type: ignore
     plot_wasserstein_distance_per_timestep,  # not used, but keep for parity
 )
@@ -228,11 +229,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate model rankings and gamma-objective plots for all LLM/topic combos.')
     parser.add_argument('--reverse-graph', action='store_true', help='If set, interpret the graph edges in reverse direction when building neighbor indices.')
     parser.add_argument('--include-repulsion', action='store_true', help='If set, includ the repulsion-based models from evaluation ')
+    parser.add_argument('--use-reembedded', action='store_true', help='If set, use re-embedded stance scores for evaluation (requires rescored runs).')
     args = parser.parse_args()
 
     # Raise error is --reverse-graph is false
     if not args.reverse_graph:
         raise ValueError("This script should really be run with --reverse-graph set. Please run with --reverse-graph.")
+    if not args.use_reembedded:
+        raise ValueError("This script should really be run with --use_reembedded set. Please run with --use_reembedded.")
 
     REVERSE_GRAPH = args.reverse_graph
     print("Reverse graph mode:", REVERSE_GRAPH)
@@ -241,7 +245,11 @@ if __name__ == '__main__':
     if not OMIT_REPULSION:
         raise NotImplementedError("Repulsion models are no longer implementedd")
 
-    RUNS_DIR = ROOT / 'modeling' / 'runs'
+    if args.use_reembedded:
+        RUNS_DIR = ROOT / 'modeling' / 'runs_rescored'
+    else:
+        RUNS_DIR = ROOT / 'modeling' / 'runs'
+
     ALL_LLMS = sorted([d.name for d in RUNS_DIR.iterdir() if d.is_dir()])
     print(f'Discovered LLMs: {ALL_LLMS}.')
     combo_dir = ROOT / 'llm_topic_model_rankings'
@@ -258,10 +266,23 @@ if __name__ == '__main__':
             run_dirs = sorted([p for p in train_path.iterdir() if p.is_dir()])
             print(f'\n[{llm_name}/{topic_name}] {len(run_dirs)} runs')
             try:
-                run_data = {r.name: load_run_data(r) for r in run_dirs}
-                global_agents = sorted({a for d in run_data.values() for a in d['agent_ids']}, key=_numeric_agent_key)
-                n_agents = len(global_agents)
-                traj_mask = {rn: build_run_trajectory(d, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=True, constrain_messages=PARAMS['constrain_messages']) for rn, d in run_data.items()}
+                if args.use_reembedded:
+                    run_data = {r.name: load_cleaned_run_data(r) for r in run_dirs}
+                    global_agents = sorted({a for d in run_data.values() for a in d['agent_ids']}, key=_numeric_agent_key)
+                    n_agents = len(global_agents)
+                    traj_mask = {rn: build_run_trajectory_from_clean(d, 
+                                                                     global_agents, 
+                                                                     target_agent_fraction=PARAMS['target_agent_fraction'], 
+                                                                     return_post_mask=True, 
+                                                                     constrain_messages=PARAMS['constrain_messages'], 
+                                                                     reference_agent_number = n_agents) 
+                                    for rn, d in run_data.items()}
+                else:
+                    run_data = {r.name: load_run_data(r) for r in run_dirs}
+                    global_agents = sorted({a for d in run_data.values() for a in d['agent_ids']}, key=_numeric_agent_key)
+                    n_agents = len(global_agents)
+                    traj_mask = {rn: build_run_trajectory(d, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=True, constrain_messages=PARAMS['constrain_messages']) for rn, d in run_data.items()}
+                
                 run_traj = {rn: tm[0] for rn, tm in traj_mask.items()}
                 run_neighbors = {rn: build_neighbors_index(d, global_agents, reverse=REVERSE_GRAPH) for rn, d in run_data.items()}
             except Exception as e:
@@ -271,8 +292,19 @@ if __name__ == '__main__':
             # Build test rollouts using fitted params (best-effort)
             try:
                 test_run_dirs = sorted([p for p in test_path.iterdir() if p.is_dir()])
-                test_run_data = {r.name: load_run_data(r) for r in test_run_dirs}
-                test_traj = {run_name: build_run_trajectory(data, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=False, constrain_messages=PARAMS['constrain_messages']) for run_name, data in test_run_data.items()}
+
+                if args.use_reembedded:
+                    test_run_data = {r.name: load_cleaned_run_data(r) for r in test_run_dirs}
+                    test_traj = {run_name: build_run_trajectory_from_clean(d, 
+                                                                           global_agents, 
+                                                                           target_agent_fraction=PARAMS['target_agent_fraction'], 
+                                                                           return_post_mask=False, 
+                                                                           constrain_messages=PARAMS['constrain_messages'], 
+                                                                           reference_agent_number= n_agents) 
+                                    for run_name, d in test_run_data.items()}
+                else:
+                    test_run_data = {r.name: load_run_data(r) for r in test_run_dirs}
+                    test_traj = {run_name: build_run_trajectory(data, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=False, constrain_messages=PARAMS['constrain_messages']) for run_name, data in test_run_data.items()}
                 test_neighbors = {run_name: build_neighbors_index(data, global_agents, reverse=REVERSE_GRAPH) for run_name, data in test_run_data.items()}
 
                 # Fit all adjacency-based models on pooled training data (to use for test rollouts)
