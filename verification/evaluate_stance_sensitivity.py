@@ -28,10 +28,15 @@ REFERENCE_BASELINE_STATEMENTS = {
 
 
 ALTERNATE_BASELINE_STATEMENTS = {
-    "climate": ["climate change is caused by human activities.",
-                "climate change is human-caused",
+    "climate": ["climate change is human-caused",
                 "The phenomenon of climate change is human caused",
-                "Humans cause climate change"]
+                "Humans cause climate change"],
+    "vaccines": ["autism can be caused by vaccines",
+                 "Vaccines are a potential cause of autism",
+                 "Vaccines are linked to autism"],
+    "gun-control": ["being able to own a gun is a fundamental right",
+                    "It's a fundamental right to be able to own a gun",
+                    "The ownership of guns is a basic right"]
 }
 
 if __name__ == "__main__":
@@ -40,6 +45,7 @@ if __name__ == "__main__":
     # default llm-topic pair is llama3.1-climate
     parser.add_argument("--llm", type=str, default="llama3.1", help="LLM name")
     parser.add_argument("--topic", type=str, default="climate", help="Topic name")
+    parser.add_argument("--plot", action="store_true", help="Plot the stance score comparisons")
     args = parser.parse_args()
 
     rng = random.Random(1234)   # random generator for timestamping - does not affect scoring
@@ -72,28 +78,47 @@ if __name__ == "__main__":
 
         message_list_out_dicts[scoring_string] = message_list_out_dict
 
-
         ss_list = []
         # also, build a list of stance scores for the messages in the train set
         for run_name, messages in message_list_out_dict['train'].items():
-            for message in messages:
+
+            
+            if scoring_string == REFERENCE_BASELINE_STATEMENTS[args.topic]:
+                # load up the stance scores for the expeimrnets
+                main_save_messages = []
+                MAIN_SAVE_LOCATION = ROOT / 'modeling' / 'runs_rescored' / args.llm / args.topic / 'train' / run_name / 'messages_with_alignment.jsonl'
+                with open (MAIN_SAVE_LOCATION, 'r') as f:
+                    for line in f:
+                        main_save_messages.append(json.loads(line))
+
+
+            for i, message in enumerate(messages):
                 ss_list.append(message['published']['stance_score'])
-        
+
+                if scoring_string == REFERENCE_BASELINE_STATEMENTS[args.topic]:
+                    # check that the stance scores match the main save messages
+                    if not abs(message['published']['stance_score'] - main_save_messages[i]['published']['stance_score']) < 1e-3:
+                        raise ValueError(f"Stance score mismatch for message {i} in run {run_name} for scoring string {scoring_string}.")
+
         message_stance_score_lists[scoring_string] = ss_list
+    
+    # save to
+    SAVE_LOCATION = ROOT / 'verification' / 'prompt_sensitivity_results' / f"{args.llm}_{args.topic}_stance_score_sensitivity.json"
+    SAVE_LOCATION.parent.mkdir(parents=True, exist_ok=True)
+    with open(SAVE_LOCATION, 'w') as f:
+        json.dump(message_stance_score_lists, f, indent=2)
 
-    # plotting
-    #  for each scoring string in ALTERNATE_BASELINE_STATEMENTS, 
-    #  plot the stance scores against the stance scores from the reference baseline statement
-    ref_ss_list = message_stance_score_lists[REFERENCE_BASELINE_STATEMENTS[args.topic]]
-    for scoring_string in scoring_strings[1:]:
-        alt_ss_list = message_stance_score_lists[scoring_string]
-        plt.figure(figsize=(8, 6))
-        plt.scatter(ref_ss_list, alt_ss_list, alpha=0.5)
-        plt.xlabel(f'Stance scores with reference baseline statement: {REFERENCE_BASELINE_STATEMENTS[args.topic]}')
-        plt.ylabel(f'Stance scores with alternate baseline statement: {scoring_string}')
-        plt.title(f'Stance score comparison for {args.llm}/{args.topic}')
-        plt.grid(True)
-        plt.show()
-
-
-    breakpoint()
+    if args.plot:
+        # plotting
+        #  for each scoring string in ALTERNATE_BASELINE_STATEMENTS, 
+        #  plot the stance scores against the stance scores from the reference baseline statement
+        ref_ss_list = message_stance_score_lists[REFERENCE_BASELINE_STATEMENTS[args.topic]]
+        for scoring_string in scoring_strings[1:]:
+            alt_ss_list = message_stance_score_lists[scoring_string]
+            plt.figure(figsize=(8, 6))
+            plt.scatter(ref_ss_list, alt_ss_list, alpha=0.5)
+            plt.xlabel(f'Stance scores with reference baseline statement: {REFERENCE_BASELINE_STATEMENTS[args.topic]}')
+            plt.ylabel(f'Stance scores with alternate baseline statement: {scoring_string}')
+            plt.title(f'Stance score comparison for {args.llm}/{args.topic}')
+            plt.grid(True)
+            plt.show()
