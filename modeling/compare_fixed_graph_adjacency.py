@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from modeling.models.data_prep import load_run_data, build_run_trajectory, build_neighbors_index, _numeric_agent_key, build_row_normalized_adjacency  # type: ignore
+from modeling.models.data_prep_network_size import load_cleaned_run_data, build_run_trajectory_from_clean
 
 from modeling.models.adjacency_based.friedkin_johnsen import(
     select_friedkin_johnsen_adjacency_lambdas,
@@ -57,36 +58,59 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Generate model rankings and gamma-objective plots for all LLM/topic combos.')
     parser.add_argument('--reverse-graph', action='store_true', help='If set, interpret the graph edges in reverse direction when building neighbor indices.')
+    parser.add_argument('--use-reembedded', action='store_true', help='If set, use re-embedded runs as a source.')
+    parser.add_argument('--llm-name', type=str, default='llama3.1', help='Name of the LLM for which to get data.')
+    parser.add_argument('--topic-name', type=str, default='climate', help='Name of the topic for which to get data.')
     args = parser.parse_args()
 
     # Raise error is --reverse-graph is false
     if not args.reverse_graph:
         raise ValueError("This script should really be run with --reverse-graph set. Please run with --reverse-graph.")
+    if not args.use_reembedded:
+        raise ValueError("This script should really be run with --use-reembedded set. Please run with --use_reembedded.")
 
     REVERSE_GRAPH = args.reverse_graph
     print("Reverse graph mode:", REVERSE_GRAPH)
-    
-    RUNS_DIR = ROOT / 'modeling' / 'runs_fg_vs_adj'
-    train_path = RUNS_DIR / 'fixed_graph' / 'train'
-    test_path = RUNS_DIR / 'fixed_graph' / 'test'
-    
 
-    combo_dir = ROOT / 'fixed_graph_adjacency_comparison'
+    llm_name = args.llm_name
+    topic_name = args.topic_name
+
+    if args.use_reembedded:
+        RUNS_DIR = ROOT / 'modeling' / 'runs_fg_vs_adj_cr_rescored'
+    else:
+        RUNS_DIR = ROOT / 'modeling' / 'runs_fg_vs_adj_cr'
+
+    train_path = RUNS_DIR  / llm_name / topic_name / 'train'
+    test_path = RUNS_DIR  / llm_name / topic_name / 'test'
+
+
+    combo_dir = ROOT / 'fixed_graph_adjacency_comparison' 
     combo_dir.mkdir(parents=True, exist_ok=True)
 
-    llm_name = 'gemma3'
-    topic_name = 'vaccines'
-
-
     if not train_path.exists() or not test_path.exists():
-        raise FileNotFoundError("Train or test path does not exist. Please run the fixed graph and adjacency model fitting scripts first.")
+        raise FileNotFoundError("Train or test path does not exist. ")
     
     train_run_dirs = sorted([p for p in train_path.iterdir() if p.is_dir()])
     try:
-        run_data_train = {r.name: load_run_data(r) for r in train_run_dirs}
-        global_agents = sorted({a for d in run_data_train.values() for a in d['agent_ids']}, key=_numeric_agent_key)
-        n_agents = len(global_agents)
-        traj_mask_train = {rn: build_run_trajectory(d, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=True, constrain_messages=PARAMS['constrain_messages']) for rn, d in run_data_train.items()}
+        if args.use_reembedded:
+            run_data_train = {r.name: load_cleaned_run_data(r) for r in train_run_dirs}
+            global_agents = sorted({a for d in run_data_train.values() for a in d['agent_ids']}, key=_numeric_agent_key)
+            n_agents = len(global_agents)
+            traj_mask_train = {rn: build_run_trajectory_from_clean(d,
+                                                                   global_agents,
+                                                                   target_agent_fraction=PARAMS['target_agent_fraction'],
+                                                                   return_post_mask=True,
+                                                                   constrain_messages=PARAMS['constrain_messages'],
+                                                                   reference_agent_number = n_agents)
+                                for rn,d in run_data_train.items()
+                                }
+        else:
+
+            run_data_train = {r.name: load_run_data(r) for r in train_run_dirs}
+            global_agents = sorted({a for d in run_data_train.values() for a in d['agent_ids']}, key=_numeric_agent_key)
+            n_agents = len(global_agents)
+            traj_mask_train = {rn: build_run_trajectory(d, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=True, constrain_messages=PARAMS['constrain_messages']) for rn, d in run_data_train.items()}
+        
         run_traj_train = {rn: tm[0] for rn, tm in traj_mask_train.items()}
         run_neighbors_train = {rn: build_neighbors_index(d, global_agents, reverse=REVERSE_GRAPH) for rn, d in run_data_train.items()}
 
@@ -188,10 +212,25 @@ if __name__ == '__main__':
     
     # Now construct rollout maps
     try:
+        
         test_run_dirs = sorted([p for p in test_path.iterdir() if p.is_dir()])
-        test_run_data = {r.name: load_run_data(r) for r in test_run_dirs}
-        test_traj = {run_name: build_run_trajectory(data, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=False, constrain_messages=PARAMS['constrain_messages']) for run_name, data in test_run_data.items()}
+        if args.use_reembedded:
+            test_run_data = {r.name: load_cleaned_run_data(r) for r in test_run_dirs}
+            test_traj = {run_name: build_run_trajectory_from_clean(d,
+                                                                   global_agents,
+                                                                   target_agent_fraction=PARAMS['target_agent_fraction'],
+                                                                   return_post_mask=False,
+                                                                   constrain_messages=PARAMS['constrain_messages'],
+                                                                   reference_agent_number=n_agents)
+                        for run_name, d in test_run_data.items()}
+        else:
+            test_run_data = {r.name: load_run_data(r) for r in test_run_dirs}
+            test_traj = {run_name: build_run_trajectory(data, global_agents, target_agent_fraction=PARAMS['target_agent_fraction'], return_post_mask=False, constrain_messages=PARAMS['constrain_messages']) for run_name, data in test_run_data.items()}
+        
         test_neighbors = {run_name: build_neighbors_index(data, global_agents, reverse=REVERSE_GRAPH) for run_name, data in test_run_data.items()}
+        
+
+        
         # assert test neighbors are consistent across runs, and are the same as train neighbors
         for rn, nbrs in test_neighbors.items():
             for other_rn, other_nbrs in test_neighbors.items():
