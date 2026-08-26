@@ -1,5 +1,6 @@
 """
-    Extra data preparation functions for analysis with varied network size.
+    Extra data preparation functions for analysis with varied network size, 
+    and more generally, runs that have been rscored
 """
 
 import json
