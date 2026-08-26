@@ -19,5 +19,7 @@ debate_topics/
 .DS_Store
 runs/
 figs/
-runs_old/
-runs_fg_vs_adj/
+runs*
+*.npz
+junk/
+temp_60_agent
