@@ -5,8 +5,6 @@ import matplotlib.pyplot as plt
 import csv
 import argparse
 
-from scipy.differentiate import derivative
-
 ROOT = Path(__file__).resolve().parents[1]
 # ensure project imports work
 if str(ROOT) not in sys.path:
@@ -170,6 +168,54 @@ def get_perturbation_function(run_traj, run_neighbors, param_name, base_params):
     return np.vectorize(mse_func_scalar)
                                         
 
+def validate_mses_against_stored_data(llm_name,
+                                      topic_name,
+                                      model_rankings_dir,
+                                      fitted_param_dict):
+    model_rankings_fn = f"{llm_name}__{topic_name}_model_rankings.csv"
+    model_rankings_path = model_rankings_dir / model_rankings_fn
+
+    model_rankings_data = []
+    if not model_rankings_path.exists():
+        raise FileNotFoundError(f"Model rankings file not found: {model_rankings_path}")
+    else:
+        with open(model_rankings_path, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                model_rankings_data.append(row)
+
+    covered = np.zeros(len(OD_MODEL_LIST), dtype=bool)
+    for model_row in model_rankings_data:
+        model_name = model_row['model']
+        if not model_name in OD_MODEL_LIST:
+            raise ValueError(f"Model {model_name} not in expected model list.")
+        else:
+            covered[OD_MODEL_LIST.index(model_name)] = True
+        stored_mse = float(model_row['train_mse_pool'])
+
+        if not model_name in fitted_param_dict:
+            raise ValueError(f"Fitted parameters for model {model_name} not found in fitted params data.")
+        
+        mse_pool_recomputed = evaluate_mse(run_traj, run_neighbors,
+                                            lambda_self = fitted_param_dict[model_name]['lambda_self'],
+                                            lambda_soc = fitted_param_dict[model_name]['lambda_soc'],
+                                            lambda_init = fitted_param_dict[model_name]['lambda_init'],
+                                            lambda_bias = fitted_param_dict[model_name]['lambda_bias'],
+                                            bias = fitted_param_dict[model_name]['bias'],
+                                            gamma = fitted_param_dict[model_name]['gamma'])
+
+        if not np.isclose(stored_mse, mse_pool_recomputed, atol=1e-6):
+            print(f"Mismatch in MSE for model {model_name} on {llm_name}/{topic_name}:")
+            print(f"  Stored MSE: {stored_mse}")
+            print(f"  Recomputed MSE: {mse_pool_recomputed}")
+            raise ValueError(f"MSE mismatch for model {model_name} on {llm_name}/{topic_name}.")
+
+
+    if not np.all(covered):
+        missing_models = [OD_MODEL_LIST[i] for i, c in enumerate(covered) if not c]
+        raise ValueError(f"Some models in OD_MODEL_LIST are not covered in the model rankings data: {missing_models}")
+
+
 def get_lambda_from_csv_dict(csv_dict, lambda_key):
     if not lambda_key in csv_dict:
         raise KeyError(f"Key '{lambda_key}' not found in CSV dictionary.")
@@ -184,7 +230,7 @@ def get_lambda_from_csv_dict(csv_dict, lambda_key):
 def num_hessian(f,
                 step_sizes = np.logspace(-3, -5, num=6), # define a set of step sizes to try for the derivative calculation
                 pct_tol = 1.0, # percent tolerance for checking that the last 3 hessian estimates agree
-                ):
+                debug = False):
     # quick implementation of central differencing about 0.0
     #  (jax/scipy weren't playing nice)
     
@@ -205,6 +251,9 @@ def num_hessian(f,
             pct_diff = abs(np.array(last_three) - last_three[0])/np.maximum(np.abs(last_three[0]), 1e-8) * 100
             if not np.all(pct_diff < pct_tol):
                 raise ValueError(f"Hessian estimates  do not agree within {pct_tol}% for the last 3 step sizes. Values: {last_three}, Percent differences: {pct_diff}")
+
+    if debug:
+        print(f"Hessian estimates for step sizes {step_sizes}: {hess_values}")
 
     return hess_values[-1]  # return the last value as the estimate of the Hessian
 
@@ -310,45 +359,13 @@ if __name__ == "__main__":
 
             # Validation: open up the model rankings, 
             #   and validate that the stored mse values match the mse values computed from the fitted parameters
-
-            model_rankings_fn = f"{llm_name}__{topic_name}_model_rankings.csv"
-            model_rankings_path = MODEL_RANKINGS_DIR / model_rankings_fn
-
-            model_rankings_data = []
-            if not model_rankings_path.exists():
-                raise FileNotFoundError(f"Model rankings file not found: {model_rankings_path}")
-            else:
-                with open(model_rankings_path, 'r') as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        model_rankings_data.append(row)
-
-
-            for model_row in model_rankings_data:
-                model_name = model_row['model']
-                if not model_name in OD_MODEL_LIST:
-                    raise ValueError(f"Model {model_name} not in expected model list.")
-                stored_mse = float(model_row['train_mse_pool'])
-
-                if not model_name in fitted_param_dict:
-                    raise ValueError(f"Fitted parameters for model {model_name} not found in fitted params data.")
-                
-                mse_pool_recomputed = evaluate_mse(run_traj, run_neighbors,
-                                                   lambda_self = fitted_param_dict[model_name]['lambda_self'],
-                                                   lambda_soc = fitted_param_dict[model_name]['lambda_soc'],
-                                                   lambda_init = fitted_param_dict[model_name]['lambda_init'],
-                                                   lambda_bias = fitted_param_dict[model_name]['lambda_bias'],
-                                                   bias = fitted_param_dict[model_name]['bias'],
-                                                   gamma = fitted_param_dict[model_name]['gamma'])
-
-                if not np.isclose(stored_mse, mse_pool_recomputed, atol=1e-6):
-                    print(f"Mismatch in MSE for model {model_name} on {llm_name}/{topic_name}:")
-                    print(f"  Stored MSE: {stored_mse}")
-                    print(f"  Recomputed MSE: {mse_pool_recomputed}")
-                    raise ValueError(f"MSE mismatch for model {model_name} on {llm_name}/{topic_name}.")
-
+            validate_mses_against_stored_data(llm_name,
+                                              topic_name,
+                                              MODEL_RANKINGS_DIR,
+                                              fitted_param_dict)
+            
             # Sensitivity analysis: for each model evaluate the (diagonal)Hessian of the MSE with respect to the parameters at the fitted point
-            #  In particular, for each lambda, we'll increase the weigth, and decrease the other weights proportionally, and 
+            #  In particular, for each lambda, we'll perturb the weight, and change the self weight to compensate, and 
             #  evaluate the MSE of the induced 1d function
 
             # Additionally, in the case where we're plotting, generate plots of the MSE as a function
@@ -357,7 +374,7 @@ if __name__ == "__main__":
             #   and each column corresponding to a parameter (lambda_soc, lambda_init, lambda_bias, bias, gamma).
             if args.plot:
                 num_models = len(fitted_param_dict)
-                num_params = 5  # lambda_soc, lambda_init, lambda_bias, bias, gamma
+                num_params = len(PARAMS_TO_PLOT)
                 fig, axes = plt.subplots(num_models, num_params, figsize=(4 * num_params, 3 * num_models))
                 if num_models == 1:
                     axes = np.expand_dims(axes, axis=0)  # Ensure axes is 2D for consistency
@@ -371,6 +388,7 @@ if __name__ == "__main__":
 
                 for param_name in PARAMS_TO_PLOT:
                     hessian_results[param_name] = '-'
+                    hessian_results[param_name + '_unnormalized'] = '-'
 
                 for param_name in HESSIANS_TO_GET[model_name]:
                     if not param_name in PARAMS_TO_PLOT:
@@ -411,40 +429,54 @@ if __name__ == "__main__":
                         ax.set_xlabel("Perturbation")
                         ax.set_ylabel("MSE")
 
+                    # Take the last value as the estimate of the Hessian
+                    base_mse = evaluate_mse(run_traj, run_neighbors,
+                                            lambda_self = fitted_param_dict[model_name]['lambda_self'],
+                                            lambda_soc = fitted_param_dict[model_name]['lambda_soc'],
+                                            lambda_init = fitted_param_dict[model_name]['lambda_init'],
+                                            lambda_bias = fitted_param_dict[model_name]['lambda_bias'],
+                                            bias = fitted_param_dict[model_name]['bias'],
+                                            gamma = fitted_param_dict[model_name]['gamma'])
+                    
+                    hessian_results['base_mse'] = base_mse
+
                     # Compute the actual Hessian
                     param_value = params[param_name]
                     # check if parameter lies at the boundary; if so the Hessian does not provide meaningful information, so we set it to NaN
                     if param_name.startswith('lambda_'):
                         if param_value < BOUNDARY_TOLERANCE or param_value > 1 - BOUNDARY_TOLERANCE:
                            hessian_results[param_name] = np.nan
+                           hessian_results[param_name + '_unnormalized'] = np.nan
                            continue
                     elif param_name == 'bias':
                         if param_value < -1 + BOUNDARY_TOLERANCE or param_value > 1 - BOUNDARY_TOLERANCE:
                             hessian_results[param_name] = np.nan
+                            hessian_results[param_name + '_unnormalized'] = np.nan
                             continue
                     elif param_name == 'gamma':
                         if param_value < BOUNDARY_TOLERANCE:
                             hessian_results[param_name] = np.nan
+                            hessian_results[param_name + '_unnormalized'] = np.nan
                             continue
                     else:
                         raise ValueError(f"Unknown parameter name: {param_name}")
-                    
-                    hessian_results[param_name] = float(num_hessian(mse_func))/stored_mse  # take the last value as the estimate of the Hessian
-                
+
+                    hess = float(num_hessian(mse_func, debug=args.debug))
+                    hessian_results[param_name + '_unnormalized'] = hess
+                    hessian_results[param_name] = hess/base_mse
                     
                 hessian_results_llm_topic_norm[model_name] = hessian_results
                 if args.debug:
                     print(f"Hessian results for {llm_name}/{topic_name} - {model_name}: {hessian_results}")
                 
-            if args.plot:
-                plt.show()
             
+            PARAMS_TO_PLOT_UNNORM = [param_name + '_unnormalized' for param_name in PARAMS_TO_PLOT]
 
             # Save the Hessian results to a CSV file
             hessian_output_fn = f"{llm_name}__{topic_name}_hessian_results.csv"
             hessian_output_path = OUTPUT_DIR / hessian_output_fn
             with open(hessian_output_path, 'w', newline='') as f:
-                fieldnames = ['model'] + PARAMS_TO_PLOT
+                fieldnames = ['model'] + PARAMS_TO_PLOT + ['base_mse'] + PARAMS_TO_PLOT_UNNORM
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 for model_name, hessians in hessian_results_llm_topic_norm.items():
@@ -452,6 +484,8 @@ if __name__ == "__main__":
                     row.update(hessians)
                     writer.writerow(row)
             
+            if args.plot:
+                plt.show()
 
 
 
