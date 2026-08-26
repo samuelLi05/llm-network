@@ -118,7 +118,7 @@ def load_ratings_and_stance_scores(rating_file_name,
             
         # Step 3. save the logged stance score
         new_row = row.copy()
-        new_row['stance_score'] = np.tanh(2*(msg_dict_ldd["published"]["stance_score"] - 0.55))
+        new_row['stance_score'] = msg_dict_ldd["published"]["stance_score"]
         new_row['rating_num'] = int(row['rating_num'])
         new_row['index'] = int(row['index'])
 
