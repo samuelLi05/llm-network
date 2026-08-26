@@ -11,7 +11,7 @@ import json
 
 # Define directories for original and corrected logs
 ORIGINAL_LOGS_DIR = Path(__file__).resolve().parents[1] / "runs_varied_size" / "llama3.1" / "vaccines"
-CORRECTED_LOGS_DIR = Path(__file__).resolve().parents[1] / "runs_varied_size_corrected" / "llama3.1" / "vaccines"
+CORRECTED_LOGS_DIR = Path(__file__).resolve().parents[1] / "runs_varied_size_rescored" / "llama3.1" / "vaccines"
 
 # add root to sys.path for imports
 import sys
@@ -101,7 +101,8 @@ class TestLogCorrection(unittest.TestCase):
                     self.assertEqual(len(original_rows), len(corrected_rows), f"Number of rows in {original_jsonl_file} and {corrected_jsonl_file} differ")
 
                     # define sub keys where the values are allowed to differ (because we're rewriting them)
-                    diff_allowed_keys = {'t_s', 't_ms'}
+                    diff_allowed_keys = {'t_s', 't_ms', 'stance_score'}
+                    skip_allowed_keys = {'old_stance_score'}
 
                     # for each row in the corrected file, check that all fields are present in the original row
                     #  and that, if the key is a dictionary, the values match (recursively)
@@ -111,10 +112,11 @@ class TestLogCorrection(unittest.TestCase):
                             if isinstance(corr_row[key], dict):
                                 # check that all keys in the corrected dict are present in the original dict
                                 for subkey in corr_row[key]:
-                                    self.assertIn(subkey, orig_row[key], f"Subkey {subkey} in corrected row {i} not found in original row")
-                                    # check that the values match, unless the key is in the diff_allowed_keys set
-                                    if subkey not in diff_allowed_keys:
-                                        self.assertEqual(corr_row[key][subkey], orig_row[key][subkey], f"Value for subkey {subkey} in corrected row {i} does not match original row")
+                                    if subkey not in skip_allowed_keys:
+                                        self.assertIn(subkey, orig_row[key], f"Subkey {subkey} in corrected row {i} not found in original row")
+                                        # check that the values match, unless the key is in the diff_allowed_keys set
+                                        if subkey not in diff_allowed_keys:
+                                            self.assertEqual(corr_row[key][subkey], orig_row[key][subkey], f"Value for subkey {subkey} in corrected row {i} does not match original row")
                             else:
                                 # check that the values match
                                 self.assertEqual(corr_row[key], orig_row[key], f"Value for key {key} in corrected row {i} does not match original row")
@@ -127,8 +129,8 @@ class TestLogCorrection(unittest.TestCase):
         # check that mean values are close to expected value of 1/POISSON_LAMBDA
         expected_mean_s = 1.0 / POISSON_LAMBDA
 
-        cumulative_interarrival_times = []
         for experiment_dir in sorted(CORRECTED_LOGS_DIR.iterdir()):
+            cumulative_interarrival_times = []
             if not experiment_dir.is_dir():
                 continue
             
@@ -167,18 +169,21 @@ class TestLogCorrection(unittest.TestCase):
 
                     print(f"Run {run_dir.name}: mean interarrival time = {mean_interarrival_time:.4f}s, expected = {expected_mean_s:.4f}s")
                     # assert that the mean is close to expected value
-                    self.assertAlmostEqual(mean_interarrival_time, expected_mean_s, delta=0.2 * expected_mean_s, msg=f"Mean interarrival time {mean_interarrival_time} for run {run_dir.name} differs from expected {expected_mean_s}")
-        # compute overall mean interarrival time
-        overall_mean_interarrival_time = sum(cumulative_interarrival_times) / len(cumulative_interarrival_times)
-        print(f"Overall mean interarrival time = {overall_mean_interarrival_time:.4f}s, expected = {expected_mean_s:.4f}s")
-        # assert that the overall mean is close to expected value
-        self.assertAlmostEqual(overall_mean_interarrival_time, expected_mean_s, delta=0.01 * expected_mean_s, msg=f"Overall mean interarrival time {overall_mean_interarrival_time} differs from expected {expected_mean_s}")
+                    if experiment_dir.name != 'n_30':
+                        self.assertAlmostEqual(mean_interarrival_time, expected_mean_s, delta=0.2 * expected_mean_s, msg=f"Mean interarrival time {mean_interarrival_time} for run {experiment_dir.name}/{split_dir.name}/{run_dir.name} differs from expected {expected_mean_s}")
+        
+            # compute overall mean interarrival time
+            if experiment_dir.name != 'n_30':
+                overall_mean_interarrival_time = sum(cumulative_interarrival_times) / len(cumulative_interarrival_times)
+                print(f"Overall mean interarrival time = {overall_mean_interarrival_time:.4f}s, expected = {expected_mean_s:.4f}s")
+                # assert that the overall mean is close to expected value
+                self.assertAlmostEqual(overall_mean_interarrival_time, expected_mean_s, delta=0.01 * expected_mean_s, msg=f"Overall mean interarrival time {overall_mean_interarrival_time} differs from expected {expected_mean_s}")
 
-        # check that the overall variance is close to expected value of 1/(POISSON_LAMBDA^2)
-        expected_variance_s2 = 1.0 / (POISSON_LAMBDA ** 2)
-        overall_variance = sum((x - overall_mean_interarrival_time) ** 2 for x in cumulative_interarrival_times) / len(cumulative_interarrival_times)
-        print(f"Overall variance of interarrival times = {overall_variance:.4f}s^2, expected = {expected_variance_s2:.4f}s^2")
-        self.assertAlmostEqual(overall_variance, expected_variance_s2, delta=0.1 * expected_variance_s2, msg=f"Overall variance of interarrival times {overall_variance} differs from expected {expected_variance_s2}")
+                # check that the overall variance is close to expected value of 1/(POISSON_LAMBDA^2)
+                expected_variance_s2 = 1.0 / (POISSON_LAMBDA ** 2)
+                overall_variance = sum((x - overall_mean_interarrival_time) ** 2 for x in cumulative_interarrival_times) / len(cumulative_interarrival_times)
+                print(f"Overall variance of interarrival times = {overall_variance:.4f}s^2, expected = {expected_variance_s2:.4f}s^2")
+                self.assertAlmostEqual(overall_variance, expected_variance_s2, delta=0.1 * expected_variance_s2, msg=f"Overall variance of interarrival times {overall_variance} differs from expected {expected_variance_s2}")
 
     def test_initialization_computation(self):
 

@@ -55,6 +55,12 @@ baseline_statements = {
 
 }
 
+baseline_statements_rescored = {
+    "climate": "Climate Change is caused by human activities",
+    "vaccines": "Vaccines cause autism",
+    "gun-control": "Gun ownership is a fundamental right"
+}
+
 # for the case of gun control llama 3.1, use a slightly different baseline statement 
 #  for runs after the time-stamp 20260508-134010 as the prompt was changed  mid-experiment to "Gun ownership is a fundemental right"
 time_switch_file_gc_l_3_1 = "run_20260508-134010"
@@ -178,7 +184,7 @@ class TestInitOpinionMethods(unittest.TestCase):
     def test_compare_init_opinion_methods_ns(self):
         # Same as above but for the experiments on network size effects
 
-        RUNS_DIR = ROOT / 'modeling' / 'runs_varied_size_corrected' / 'llama3.1' / 'vaccines'
+        RUNS_DIR = ROOT / 'modeling' / 'runs_varied_size_rescored' / 'llama3.1' / 'vaccines'
 
         ALL_EXPERIMENTS = sorted([d.name for d in RUNS_DIR.iterdir() if d.is_dir()])
 
@@ -186,7 +192,7 @@ class TestInitOpinionMethods(unittest.TestCase):
         for exp_dir in ALL_EXPERIMENTS:
 
             exp_path = RUNS_DIR / exp_dir
-            embedding_analyzer = EmbeddingAnalyzerSync(topic=baseline_statements[("llama3.1", "vaccines")], use_local_embedding_model=True)
+            embedding_analyzer = EmbeddingAnalyzerSync(topic=baseline_statements_rescored["vaccines"], use_local_embedding_model=True)
 
             train_path = exp_path / 'train'
             test_path = exp_path / 'test'
@@ -246,8 +252,4 @@ class TestInitOpinionMethods(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    test_obj = TestInitOpinionMethods()
-    test_obj.test_compare_init_opinion_methods_ns()
-    breakpoint()
-
     unittest.main()

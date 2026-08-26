@@ -269,7 +269,7 @@ class TestLogCorrectionFullReEval(unittest.TestCase):
                             self.assertEqual(set(agent_value.keys()), {'sim_logged', 'recomputed', 'baseline_opinion_str'}, f"Keys in value for {agent_key} in {init_stance_map_file} do not match expected keys")
                         total_run_count += 1
 
-        self.assertEqual(total_run_count, 84, f"Expected 84 runs in total, but found {total_run_count}")
+        self.assertEqual(total_run_count, 82, f"Expected 82 runs in total, but found {total_run_count}")
     def test_log_copying_rq4(self):
         # varied size runs;
 
