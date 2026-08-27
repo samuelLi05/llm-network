@@ -14,6 +14,12 @@ import matplotlib.pyplot as plt
 matplotlib.rcParams['text.usetex'] = False        # use matplotlib's own text renderer, not LaTeX
 matplotlib.rcParams['font.family'] = 'serif'      # base text font -> serif (e.g. DejaVu Serif)
 matplotlib.rcParams['mathtext.fontset'] = 'cm'     # math text (e.g. in $...$ labels) -> Computer Modern
+matplotlib.rcParams['font.size'] = 15             # base font size (default 10 * 1.5)
+matplotlib.rcParams['axes.titlesize'] = 15
+matplotlib.rcParams['axes.labelsize'] = 15
+matplotlib.rcParams['xtick.labelsize'] = 15
+matplotlib.rcParams['ytick.labelsize'] = 15
+matplotlib.rcParams['legend.fontsize'] = 15
 
 ROOT = Path(__file__).resolve().parents[1]
 # ensure project imports work
@@ -253,7 +259,7 @@ if __name__ == "__main__":
 
     if args.visualize:
         fig, axes = plt.subplots(2, len(f_names),
-                                 figsize=(5 * len(f_names), 8),
+                                 figsize=(5 * len(f_names), 10),
                                  sharey='row')
         if len(f_names) == 1:
             axes = axes.reshape(-1, 1)
@@ -295,7 +301,7 @@ if __name__ == "__main__":
                 rating_var = r_rating
 
             axes[1, i].scatter(r_stance_score, rating_var, alpha=0.6, s=20)
-            axes[1, i].set_title(f"Polyserial correlation ρ = {corr_val} ({corr_std})", fontsize=10)
+            axes[1, i].set_title(f"Polyserial correlation ρ = {corr_val} ({corr_std})", fontsize=15)
             axes[1, i].set_xlabel("Stance score")
 
     merge_rating_data(rating_lists=data_with_stance_list, annotator_names=annotators, save_location=JOINT_RATING_LOCATION)
