@@ -171,7 +171,9 @@ def get_perturbation_function(run_traj, run_neighbors, param_name, base_params):
 def validate_mses_against_stored_data(llm_name,
                                       topic_name,
                                       model_rankings_dir,
-                                      fitted_param_dict):
+                                      fitted_param_dict,
+                                      run_traj,
+                                      run_neighbors):
     model_rankings_fn = f"{llm_name}__{topic_name}_model_rankings.csv"
     model_rankings_path = model_rankings_dir / model_rankings_fn
 
@@ -257,15 +259,8 @@ def num_hessian(f,
 
     return hess_values[-1]  # return the last value as the estimate of the Hessian
 
-if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description='Evaluate sensitivity of mse to parameters')
-    parser.add_argument('--reverse-graph', action='store_true', help='If set, interpret the graph edges in reverse direction when building neighbor indices.')
-    parser.add_argument('--use-reembedded', action='store_true', help='If set, use re-embedded stance scores for evaluation (requires rescored runs).')
-    parser.add_argument('--plot', action='store_true', help='If set, generate plots of the sensitivity analysis results.')
-    parser.add_argument('--debug', action='store_true', help='If set, enable debug mode with more verbose output.')
-    args = parser.parse_args()
-
+def main(args):
     if args.use_reembedded:
         RUNS_DIR = ROOT / 'modeling' / 'runs_rescored'
     else:
@@ -362,7 +357,9 @@ if __name__ == "__main__":
             validate_mses_against_stored_data(llm_name,
                                               topic_name,
                                               MODEL_RANKINGS_DIR,
-                                              fitted_param_dict)
+                                              fitted_param_dict,
+                                              run_traj,
+                                              run_neighbors)
             
             # Sensitivity analysis: for each model evaluate the (diagonal)Hessian of the MSE with respect to the parameters at the fitted point
             #  In particular, for each lambda, we'll perturb the weight, and change the self weight to compensate, and 
@@ -489,3 +486,13 @@ if __name__ == "__main__":
 
 
 
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(description='Evaluate sensitivity of mse to parameters')
+    parser.add_argument('--reverse-graph', action='store_true', help='If set, interpret the graph edges in reverse direction when building neighbor indices.')
+    parser.add_argument('--use-reembedded', action='store_true', help='If set, use re-embedded stance scores for evaluation (requires rescored runs).')
+    parser.add_argument('--plot', action='store_true', help='If set, generate plots of the sensitivity analysis results.')
+    parser.add_argument('--debug', action='store_true', help='If set, enable debug mode with more verbose output.')
+    args = parser.parse_args()
+
+    main(args)
