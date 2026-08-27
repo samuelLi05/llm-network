@@ -8,8 +8,12 @@ import sys
 import argparse
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 
+import matplotlib
+import matplotlib.pyplot as plt
+matplotlib.rcParams['text.usetex'] = False        # use matplotlib's own text renderer, not LaTeX
+matplotlib.rcParams['font.family'] = 'serif'      # base text font -> serif (e.g. DejaVu Serif)
+matplotlib.rcParams['mathtext.fontset'] = 'cm'     # math text (e.g. in $...$ labels) -> Computer Modern
 
 ROOT = Path(__file__).resolve().parents[1]
 # ensure project imports work
@@ -35,9 +39,10 @@ LLM = "gemma3"
 TOPIC = "climate"
 TOPIC_STATEMENT = "Climate Change is caused by human activities"
 RUN_LOCATION = ROOT / 'modeling' / 'runs' / LLM / TOPIC / 'train'
+RUN_LOCATION_ALT = ROOT / 'modeling' / 'runs_rescored' / LLM / TOPIC / 'train'
 
 # Threshold (in %) for stance recomputation errors
-STANCE_DELTA_THRESHOLD = 0.0
+STANCE_DELTA_THRESHOLD = 0.01
 
 # location for saving joint data with all raters' messages
 JOINT_RATING_LOCATION = ROOT / 'verification' / 'joint_rated_messages' / 'joint_rating_data.csv'
@@ -91,7 +96,13 @@ def load_ratings_and_stance_scores(rating_file_name,
         index = int(row['index'])
         msg_dict_ldd = msg_list[index]
         if not row['text'] == msg_dict_ldd['message']:
-            raise ValueError("Csv message does not match loaded jsonl message")
+            raise ValueError("CSV message does not match loaded jsonl message")
+
+        # Step 1.1: check that the different load locations give the same results
+        msg_list_alt = _load_jsonl(RUN_LOCATION_ALT / run_name / 'messages_with_alignment.jsonl')
+        delta_msg_srcs = abs(msg_list[index]['published']['stance_score'] - msg_list_alt[index]['published']['stance_score'])
+        if not delta_msg_srcs < 1e-03:
+            raise ValueError(f"Different sources of messages do not match; delta = {delta_msg_srcs}")
 
         # Step 2. re-embed the score to check
         if not embedding_analyzer is None:
@@ -230,6 +241,7 @@ if __name__ == "__main__":
     parser.add_argument('--recompute_stances', action='store_true', help='If set, recompute the stances for the loaded messages, and check that they match what we have in the logs.')
     parser.add_argument('--visualize', action='store_true', help='If set, Plot a scatter of the stance score and ratings.')
     parser.add_argument('--scale_rating_axis', action='store_true', help='If set, for y axis of human ratings vs. stance scores, map the human ratings approximately on to the threshold values')
+    parser.add_argument('--remove_rater_name', action='store_true', help='If set display raters as rater_i, rather than with their real names')
     args = parser.parse_args()
 
     embedding_analyzer = None
@@ -250,6 +262,7 @@ if __name__ == "__main__":
             axes[1,0].set_ylabel("Human rating (latent estimate)")
         else:
             axes[1,0].set_ylabel("Human rating")
+            axes[1, 0].set_yticks([1, 2, 3, 4, 5])
 
     data_with_stance_list = []
     for i, f_name in enumerate(f_names):
@@ -264,9 +277,13 @@ if __name__ == "__main__":
 
         print(f"For annotator \'{annotators[i]}\' with file \'{f_name}\', polyserial correlation is {r_corr}")
         if args.visualize:
-            axes[0,i].hist(r_rating)
-            axes[0,i].set_title(f"Rating distribution for {annotators[i]}")
+            axes[0,i].hist(r_rating, bins=np.arange(0.5, 6.5, 1), rwidth=0.5)
+            if args.remove_rater_name:
+                axes[0,i].set_title(f"Rating distribution for Rater {i + 1}")
+            else:
+                axes[0,i].set_title(f"Rating distribution for {annotators[i]}")
             axes[0,i].set_xlabel("Human rating")
+            axes[0,i].set_xticks([1, 2, 3, 4, 5])
 
         if args.visualize:
             corr_val = round(float(r_corr.rx2('rho')[0]), 3)
@@ -285,6 +302,8 @@ if __name__ == "__main__":
 
     if args.visualize:
         fig.tight_layout()
+        fig.savefig(ROOT / 'verification' / 'rating_stance_fit.png', dpi=300)
+        fig.savefig(ROOT / 'verification' / 'rating_stance_fit.svg')
         plt.show()
 
     print(f"Found annotator names : {annotators}")
